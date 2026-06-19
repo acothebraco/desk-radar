@@ -1,4 +1,4 @@
-# Capsule Radar 🛩️
+# Desk Radar 🛩️
 
 <p align="center">
   <a href="https://socquique.github.io/capsule-radar/"><img src="https://img.shields.io/badge/Flash%20in%20browser-FF6D00?logo=googlechrome&logoColor=white" alt="Flash in browser"></a>
