@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Plane Radar 2.0 — Mockup</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Rajdhani:wght@500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --green:#1dff86; --green-soft:#9affc8; --ink:#eafff3;
+    --amber:#ffb23c; --red:#ff5a3c; --cyan:#3ce0ff; --lime:#c8ff3c;
+    --mono:'Share Tech Mono', ui-monospace, Menlo, monospace;
+    --disp:'Rajdhani', system-ui, sans-serif;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0;min-height:100vh;display:flex;flex-direction:column;align-items:center;
+    justify-content:center;gap:22px;padding:34px 16px;
+    background:radial-gradient(110% 90% at 50% 0%, #0c1411 0%, #050807 55%, #020403 100%);
+    font-family:var(--disp);color:#cdd6d1;
+  }
+  .caption{font-family:var(--mono);font-size:12px;letter-spacing:3px;color:#5f7a6c;text-align:center}
+  .caption b{color:var(--green-soft)}
+
+  .device{padding:15px;border-radius:50%;
+    background:linear-gradient(150deg,#33checc 0%,#222625 8%,#0c0e0d 100%);
+    background:linear-gradient(150deg,#2c302f 0%,#0c0e0d 100%);
+    box-shadow:0 22px 60px rgba(0,0,0,.6),inset 0 2px 2px rgba(255,255,255,.07),inset 0 -3px 6px rgba(0,0,0,.6);
+    position:relative}
+  .screen{position:relative;width:min(82vw,440px);aspect-ratio:1;border-radius:50%;
+    overflow:hidden;background:#000;box-shadow:inset 0 0 28px rgba(0,0,0,.95)}
+  #radar{width:100%;height:100%;display:block}
+
+  .sweep{transform-origin:233px 233px;animation:spin 4.2s linear infinite}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  .pulse{transform-origin:233px 233px;animation:pul 2.6s ease-out infinite}
+  @keyframes pul{0%{r:5;opacity:.9}100%{r:28;opacity:0}}
+  .alert .halo{transform-origin:center;animation:hal 1.1s ease-out infinite}
+  @keyframes hal{0%{r:10;opacity:.9;stroke-width:2.4}100%{r:26;opacity:0;stroke-width:.5}}
+  #selRing{transition:cx .25s ease, cy .25s ease;animation:sel 1.9s ease-in-out infinite}
+  @keyframes sel{0%,100%{opacity:.95}50%{opacity:.4}}
+  .ac{cursor:pointer}
+  .ac .glyph{filter:drop-shadow(0 0 3px currentColor)}
+  .ac .lbl{pointer-events:none}
+
+  /* faint scanline / phosphor texture */
+  .screen::after{content:"";position:absolute;inset:0;pointer-events:none;border-radius:50%;
+    background:repeating-linear-gradient(0deg,rgba(0,0,0,0) 0 2px,rgba(0,0,0,.18) 2px 3px);
+    mix-blend-mode:multiply;opacity:.5}
+  .screen::before{content:"";position:absolute;inset:0;pointer-events:none;border-radius:50%;
+    box-shadow:inset 0 0 60px rgba(0,40,18,.55)}
+
+  .hud{position:absolute;top:6.5%;left:0;right:0;display:flex;justify-content:center;gap:16px;
+    font-family:var(--mono);font-size:12px;color:var(--green-soft);letter-spacing:1px;pointer-events:none}
+  .hud .wifi{color:var(--green);letter-spacing:-1px}
+  .brand{position:absolute;bottom:7.5%;left:0;right:0;text-align:center;font-family:var(--mono);
+    font-size:9px;letter-spacing:3px;color:var(--green);opacity:.45}
+
+  .panel{width:min(90vw,440px);display:flex;flex-direction:column;gap:13px}
+  .card{background:linear-gradient(160deg,#14201a,#0a0e0c);border:1px solid #1f3a2b;border-radius:16px;padding:15px 17px;
+    box-shadow:0 10px 30px rgba(0,0,0,.4)}
+  .card-head{display:flex;align-items:center;gap:11px;margin-bottom:13px}
+  .dot{width:11px;height:11px;border-radius:50%;background:var(--lime);box-shadow:0 0 9px var(--lime);flex:none}
+  .call{font-family:var(--mono);font-size:22px;color:var(--ink);letter-spacing:1.5px}
+  .badge{margin-left:auto;font-family:var(--mono);font-size:11px;color:var(--green-soft);
+    background:#10231a;border:1px solid #2a4a39;border-radius:6px;padding:3px 9px}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:11px 20px}
+  .grid div{display:flex;flex-direction:column;gap:3px}
+  .grid label{font-family:var(--disp);font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:#5f7a6c}
+  .grid b{font-family:var(--mono);font-size:15px;color:#dfeee6;font-weight:400}
+
+  .legend{display:flex;flex-wrap:wrap;align-items:center;gap:8px 10px}
+  .legend .lt{font-size:12px;letter-spacing:1px;color:#7d9588}
+  .legend .bar{flex:1;min-width:160px;height:9px;border-radius:5px;
+    background:linear-gradient(90deg,var(--red),var(--amber),var(--lime),var(--green),var(--cyan))}
+  .legend .ticks{width:100%;display:flex;justify-content:space-between;font-family:var(--mono);
+    font-size:9px;color:#6f877a}
+  .hint{font-size:13px;line-height:1.55;color:#8aa39b;text-align:center;margin:2px 0 0}
+</style>
+</head>
+<body>
+
+  <div class="caption">ESP32-S3 · AMOLED REDONDA 466×466 · <b>PLANE RADAR 2.0</b></div>
+
+  <div class="device">
+    <div class="screen">
+      <svg viewBox="0 0 466 466" xmlns="http://www.w3.org/2000/svg" id="radar">
+        <defs>
+          <filter id="glow" x="-60%" y="-60%" width="220%" height="220%">
+            <feGaussianBlur stdDeviation="2.2" result="b"/>
+            <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+          </filter>
+          <radialGradient id="vign" cx="50%" cy="50%" r="50%">
+            <stop offset="68%" stop-color="#000"/>
+            <stop offset="100%" stop-color="#04140b"/>
+          </radialGradient>
+          <linearGradient id="sweepGrad" x1="0" y1="0" x2="1" y2="0">
+            <stop offset="0%" stop-color="#1dff86" stop-opacity="0"/>
+            <stop offset="78%" stop-color="#1dff86" stop-opacity="0.09"/>
+            <stop offset="100%" stop-color="#1dff86" stop-opacity="0.30"/>
+          </linearGradient>
+        </defs>
+
+        <circle cx="233" cy="233" r="233" fill="url(#vign)"/>
+
+        <g stroke="#1dff86" fill="none">
+          <circle cx="233" cy="233" r="218" stroke-opacity="0.34"/>
+          <circle cx="233" cy="233" r="160" stroke-opacity="0.26"/>
+          <circle cx="233" cy="233" r="104" stroke-opacity="0.26"/>
+          <circle cx="233" cy="233" r="50"  stroke-opacity="0.26"/>
+        </g>
+        <g stroke="#1dff86" stroke-opacity="0.16">
+          <line x1="233" y1="22" x2="233" y2="444"/>
+          <line x1="22" y1="233" x2="444" y2="233"/>
+        </g>
+
+        <g class="sweep">
+          <path d="M233,233 L140,33.6 A220,220 0 0 1 326,33.6 Z" fill="url(#sweepGrad)"/>
+          <line x1="233" y1="233" x2="326" y2="33.6" stroke="#3dff9a" stroke-width="2" stroke-opacity="0.85" filter="url(#glow)"/>
+        </g>
+
+        <g font-family="Share Tech Mono, monospace" text-anchor="middle">
+          <text x="233" y="40" font-size="21" fill="#eafff3">N</text>
+          <text x="233" y="441" font-size="18" fill="#9affc8">S</text>
+          <text x="35" y="239" font-size="18" fill="#9affc8">W</text>
+          <text x="431" y="239" font-size="18" fill="#9affc8">E</text>
+        </g>
+        <text x="318" y="226" fill="#1dff86" fill-opacity="0.5" font-family="Share Tech Mono, monospace" font-size="11">15 km</text>
+
+        <g id="planes" font-family="Share Tech Mono, monospace">
+          <g class="ac" data-id="ac1" transform="translate(322,150)" style="color:#c8ff3c">
+            <path class="trail" d="M0,0 L26,26" stroke="#c8ff3c" stroke-width="2" stroke-opacity="0.22" stroke-dasharray="2 5"/>
+            <path class="glyph" d="M0,-9 L2,-1 L9,3 L2,3 L3,8 L0,6.5 L-3,8 L-2,3 L-9,3 L-2,-1 Z" fill="#c8ff3c" transform="rotate(225)"/>
+            <text class="lbl" x="11" y="-3" font-size="12" fill="#dfffaf">RYR4521</text>
+            <text class="lbl" x="11" y="10" font-size="10" fill="#c8ff3c">11025 ft</text>
+          </g>
+          <g class="ac" data-id="ac2" transform="translate(252,74)" style="color:#3ce0ff">
+            <path class="trail" d="M0,0 L0,-26" stroke="#3ce0ff" stroke-width="2" stroke-opacity="0.22" stroke-dasharray="2 5"/>
+            <path class="glyph" d="M0,-9 L2,-1 L9,3 L2,3 L3,8 L0,6.5 L-3,8 L-2,3 L-9,3 L-2,-1 Z" fill="#3ce0ff" transform="rotate(180)"/>
+            <text class="lbl" x="10" y="-3" font-size="12" fill="#dffaff">VLG28PK</text>
+            <text class="lbl" x="10" y="10" font-size="10" fill="#3ce0ff">34000 ft</text>
+          </g>
+          <g class="ac" data-id="ac3" transform="translate(118,236)" style="color:#ffb23c">
+            <path class="trail" d="M0,0 L-26,-4" stroke="#ffb23c" stroke-width="2" stroke-opacity="0.22" stroke-dasharray="2 5"/>
+            <path class="glyph" d="M0,-9 L2,-1 L9,3 L2,3 L3,8 L0,6.5 L-3,8 L-2,3 L-9,3 L-2,-1 Z" fill="#ffb23c" transform="rotate(90)"/>
+            <text class="lbl" x="-56" y="-3" font-size="12" fill="#fff3df">IBE3174</text>
+            <text class="lbl" x="-56" y="10" font-size="10" fill="#ffb23c">6200 ft</text>
+          </g>
+          <g class="ac" data-id="ac4" transform="translate(352,330)" style="color:#3ce0ff">
+            <path class="trail" d="M0,0 L24,14" stroke="#3ce0ff" stroke-width="2" stroke-opacity="0.2" stroke-dasharray="2 5"/>
+            <path class="glyph" d="M0,-9 L2,-1 L9,3 L2,3 L3,8 L0,6.5 L-3,8 L-2,3 L-9,3 L-2,-1 Z" fill="#3ce0ff" transform="rotate(300)"/>
+            <text class="lbl" x="11" y="-3" font-size="12" fill="#dffaff">EZY83GH</text>
+            <text class="lbl" x="11" y="10" font-size="10" fill="#3ce0ff">38000 ft</text>
+          </g>
+          <g class="ac" data-id="ac6" transform="translate(150,322)" style="color:#ff7a3c">
+            <path class="trail" d="M0,0 L-22,-8" stroke="#ff7a3c" stroke-width="2" stroke-opacity="0.2" stroke-dasharray="2 5"/>
+            <path class="glyph" d="M0,-8 L2,-1 L8,3 L2,3 L3,7 L0,6 L-3,7 L-2,3 L-8,3 L-2,-1 Z" fill="#ff7a3c" transform="rotate(70)"/>
+            <text class="lbl" x="10" y="-3" font-size="11" fill="#ffe6d8">EC-ABC</text>
+            <text class="lbl" x="10" y="9" font-size="9" fill="#ff7a3c">2800 ft</text>
+          </g>
+          <g class="ac alert" data-id="ac5" transform="translate(212,360)" style="color:#ff5a3c">
+            <circle class="halo" cx="0" cy="0" r="12" fill="none" stroke="#ff5a3c" stroke-width="2"/>
+            <path class="glyph" d="M0,-9 L2,-1 L9,3 L2,3 L3,8 L0,6.5 L-3,8 L-2,3 L-9,3 L-2,-1 Z" fill="#ff5a3c" transform="rotate(20)"/>
+            <text class="lbl" x="12" y="-3" font-size="12" fill="#ffd9cf">RESCUE51</text>
+            <text class="lbl" x="12" y="10" font-size="10" fill="#ff8a6a">1200 ft</text>
+          </g>
+        </g>
+
+        <circle id="selRing" cx="322" cy="150" r="15" fill="none" stroke="#ffffff" stroke-width="1.6"/>
+
+        <circle class="pulse" cx="233" cy="233" r="6" fill="none" stroke="#eafff3" stroke-width="1.4"/>
+        <circle cx="233" cy="233" r="3.2" fill="#eafff3"/>
+      </svg>
+
+      <div class="hud">
+        <span class="wifi">▮▮▮</span>
+        <span class="cnt">✈ 6</span>
+        <span class="clk">18:42</span>
+      </div>
+      <div class="brand">PLANE RADAR 2.0</div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="card">
+      <div class="card-head">
+        <span class="dot" id="cDot"></span>
+        <span class="call" id="cCall">RYR4521</span>
+        <span class="badge" id="cType">B738</span>
+      </div>
+      <div class="grid">
+        <div><label>Altitud</label><b id="cAlt">11 025 ft</b></div>
+        <div><label>Vert. speed</label><b id="cVs">▲ +1280 fpm</b></div>
+        <div><label>Velocidad</label><b id="cSpd">412 kt</b></div>
+        <div><label>Rumbo</label><b id="cHdg">225°</b></div>
+        <div><label>Distancia</label><b id="cDist">12.4 km</b></div>
+        <div><label>Squawk</label><b id="cSq">3421</b></div>
+      </div>
+    </div>
+
+    <div class="legend">
+      <span class="lt">Altitud</span>
+      <div class="bar"></div>
+      <div class="ticks"><span>0</span><span>10k</span><span>20k</span><span>35k+ ft</span></div>
+    </div>
+
+    <p class="hint">Toca cualquier avión y su ficha se actualiza en vivo. El barrido, las estelas y el aviso de emergencia (en rojo, RESCUE51 con squawk 7700) están animados.</p>
+  </div>
+
+<script>
+  const DATA = {
+    ac1:{call:"RYR4521",type:"B738",alt:"11 025 ft",vs:"▲ +1280 fpm",spd:"412 kt",hdg:"225°",dist:"12.4 km",sq:"3421",color:"#c8ff3c",x:322,y:150},
+    ac2:{call:"VLG28PK",type:"A320",alt:"34 000 ft",vs:"— level",spd:"448 kt",hdg:"180°",dist:"8.1 km",sq:"1000",color:"#3ce0ff",x:252,y:74},
+    ac3:{call:"IBE3174",type:"A21N",alt:"6 200 ft",vs:"▼ −980 fpm",spd:"286 kt",hdg:"090°",dist:"5.3 km",sq:"4655",color:"#ffb23c",x:118,y:236},
+    ac4:{call:"EZY83GH",type:"A320",alt:"38 000 ft",vs:"— level",spd:"461 kt",hdg:"300°",dist:"14.0 km",sq:"2200",color:"#3ce0ff",x:352,y:330},
+    ac6:{call:"EC-ABC",type:"C172",alt:"2 800 ft",vs:"▲ +320 fpm",spd:"96 kt",hdg:"070°",dist:"7.6 km",sq:"7000",color:"#ff7a3c",x:150,y:322},
+    ac5:{call:"RESCUE51",type:"H145",alt:"1 200 ft",vs:"— hover",spd:"42 kt",hdg:"020°",dist:"3.1 km",sq:"7700 ⚠",color:"#ff5a3c",x:212,y:360}
+  };
+  function sel(id){
+    const d=DATA[id]; if(!d) return;
+    cCall.textContent=d.call; cType.textContent=d.type; cAlt.textContent=d.alt;
+    cVs.textContent=d.vs; cSpd.textContent=d.spd; cHdg.textContent=d.hdg;
+    cDist.textContent=d.dist; cSq.textContent=d.sq;
+    cDot.style.background=d.color; cDot.style.boxShadow="0 0 9px "+d.color;
+    const r=document.getElementById("selRing");
+    r.setAttribute("cx",d.x); r.setAttribute("cy",d.y);
+    r.setAttribute("stroke", id==="ac5" ? "#ff5a3c" : "#ffffff");
+  }
+  document.querySelectorAll(".ac").forEach(el=>{
+    el.addEventListener("click",()=>sel(el.getAttribute("data-id")));
+  });
+  sel("ac1");
+</script>
+</body>
+</html>

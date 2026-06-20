@@ -1,0 +1,13 @@
+{
+  "name": "Desk Radar",
+  "version": "__FWVER__",
+  "new_install_prompt_erase": true,
+  "builds": [
+    {
+      "chipFamily": "ESP32-S3",
+      "parts": [
+        { "path": "deskradar-esp32s3.bin", "offset": 0 }
+      ]
+    }
+  ]
+}
