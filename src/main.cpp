@@ -326,7 +326,7 @@ static void handleRoot() {
         gpsRow += g_useGps ? "checked" : "";
         gpsRow += " onchange='gp(this.checked)'>Use GPS for location</label>";
     }
-    static char buf[8400];   // static (not on the 8 KB loop-task stack) to avoid overflow
+    static char buf[9200];   // static (not on the 8 KB loop-task stack) to avoid overflow
     snprintf(buf, sizeof(buf),
         "<!DOCTYPE html><html><head><meta charset=utf-8>"
         "<meta name=viewport content='width=device-width,initial-scale=1'>"
@@ -386,6 +386,9 @@ static void handleRoot() {
         "<div class=card><div class=t>Network</div>"
         "<p style='color:#9affc8;font-size:13px;margin:0 0 4px'>Forget the saved WiFi and reopen the setup portal.</p>"
         "<form method=POST action=/wifi><button class=w>Reset WiFi</button></form></div>"
+        "<div class=card><div class=t>Firmware</div>"
+        "<p style='color:#9affc8;font-size:13px;margin:0 0 6px'>Version <b>v" FW_VERSION "</b></p>"
+        "<p style='color:#5f7a6c;font-size:12px;margin:0'>Built " __DATE__ " " __TIME__ "</p></div>"
         "<p class=ft>Reach me at <code>deskradar.local</code> &middot; <a href=/update style='color:#9affc8'>Firmware update</a> &middot; v" FW_VERSION "</p>"
         "<script>"
         "var C=[%.5f,%.5f];var MAP=L.map('map').setView(C,10);"
