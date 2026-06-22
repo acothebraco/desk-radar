@@ -28,6 +28,8 @@ static lv_obj_t *s_hudBars[4] = { nullptr, nullptr, nullptr, nullptr };   // WiF
 static lv_obj_t *s_list = nullptr;
 static lv_obj_t *s_statsLbl = nullptr;
 static lv_obj_t *s_statsNet = nullptr;
+static lv_obj_t *s_hudGps   = nullptr;   // HUD satellite icon (hidden unless GPS auto-location is on)
+static lv_obj_t *s_statsGps = nullptr;   // Stats view GPS status line
 
 // --------------------------------------------------------------------- units
 // 0 = Aviation (ft, kt, km) · 1 = Metric (m, km/h, km) · 2 = Imperial (ft, mph, mi).
@@ -271,6 +273,30 @@ void ui_set_date(const char *date) {
 
 void ui_set_netinfo(const char *line) {
     if (s_statsNet && line) lv_label_set_text(s_statsNet, line);
+}
+
+// GPS indicator. state: 0 = off / no module (hidden), 1 = acquiring (amber), 2 = fix (green).
+void ui_set_gps(int state, int sats) {
+    if (state <= 0) {                                 // hidden when GPS auto-location is off
+        if (s_hudGps)   lv_label_set_text(s_hudGps, "");
+        if (s_statsGps) lv_label_set_text(s_statsGps, "");
+        return;
+    }
+    const bool fix = (state >= 2);
+    const lv_color_t col = fix ? UI_GREEN : lv_color_hex(0xFFB23C);   // amber while acquiring
+    if (s_hudGps) {
+        char b[16];
+        snprintf(b, sizeof(b), LV_SYMBOL_GPS "%d", sats);
+        lv_label_set_text(s_hudGps, b);
+        lv_obj_set_style_text_color(s_hudGps, col, 0);
+    }
+    if (s_statsGps) {
+        char s[40];
+        if (fix) snprintf(s, sizeof(s), LV_SYMBOL_GPS " fix  " LV_SYMBOL_BULLET "  %d sats", sats);
+        else     snprintf(s, sizeof(s), LV_SYMBOL_GPS " acquiring  (%d sats)", sats);
+        lv_label_set_text(s_statsGps, s);
+        lv_obj_set_style_text_color(s_statsGps, col, 0);
+    }
 }
 
 // Rebuild the scrollable contact list. Costly (deletes+recreates LVGL buttons), so we
@@ -553,6 +579,12 @@ void ui_create(void) {
         lv_obj_clear_flag(s_hudBars[i], LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
     }
 
+    s_hudGps = lv_label_create(s_tileRadar);     // GPS satellite icon (between WiFi bars and count)
+    lv_obj_set_style_text_font(s_hudGps, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(s_hudGps, UI_GREEN, 0);
+    lv_label_set_text(s_hudGps, "");             // hidden until ui_set_gps() says GPS is on
+    lv_obj_align(s_hudGps, LV_ALIGN_TOP_MID, -62, 50);
+
     s_hudCount = lv_label_create(s_tileRadar);
     lv_obj_set_style_text_font(s_hudCount, &lv_font_montserrat_14, 0);
     lv_obj_set_style_text_color(s_hudCount, UI_INK, 0);
@@ -596,6 +628,13 @@ void ui_create(void) {
     lv_obj_set_style_text_color(s_statsLbl, UI_SOFT, 0);
     lv_label_set_text(s_statsLbl, "Aircraft   0");
     lv_obj_align(s_statsLbl, LV_ALIGN_CENTER, 0, -16);
+
+    s_statsGps = lv_label_create(sp);               // GPS status line (hidden unless GPS is on)
+    lv_obj_set_style_text_font(s_statsGps, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(s_statsGps, UI_SOFT, 0);
+    lv_obj_set_style_text_align(s_statsGps, LV_TEXT_ALIGN_CENTER, 0);
+    lv_label_set_text(s_statsGps, "");
+    lv_obj_align(s_statsGps, LV_ALIGN_CENTER, 0, 90);
 
     // footer: where to reach the configuration page (IP / hostname / setup AP)
     s_statsNet = lv_label_create(sp);
