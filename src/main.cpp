@@ -665,7 +665,7 @@ static void handleUpdatePage() {
         "#fill{height:100%;width:0;background:#1dff86;transition:width .2s}#msg{margin-top:10px;color:#9affc8;font-size:13px}"
         "a{color:#1dff86}p{color:#9affc8;font-size:13px}"
         "</style></head><body><h1>Firmware update (OTA)</h1><div class=card>"
-        "<p>Upload the <b>app firmware</b> <code>deskradar-ota.bin</code> from the GitHub release. "
+        "<p>Upload the <b>app firmware</b> <code>DeskRadar-ota.bin</code> from the GitHub release. "
         "Do NOT use the merged flash image here.</p>"
         "<input type=file id=f accept='.bin'>"
         "<button onclick=u()>Update over WiFi</button>"
@@ -829,9 +829,14 @@ void loop() {
     // OTA: set up once WiFi is up, then service it every loop (flash over the air)
     static bool otaUp = false;
     if (!otaUp && WiFi.status() == WL_CONNECTED) {
-        ArduinoOTA.setHostname("deskradar");        // -> deskradar.local (registers mDNS)
+        ArduinoOTA.setHostname("deskradar");        // -> deskradar.local (registers mDNS for OTA)
         ArduinoOTA.begin();
-        MDNS.addService("http", "tcp", 80);            // advertise the config web page
+        if (MDNS.begin("deskradar")) {
+            MDNS.addService("http", "tcp", 80);    // advertise the config web page
+            Serial.println("[mdns] deskradar.local registered");
+        } else {
+            Serial.println("[mdns] begin failed");
+        }
         otaUp = true;
         Serial.println("[ota] ready: pio run -e esp32-s3-amoled-175-ota -t upload");
     }

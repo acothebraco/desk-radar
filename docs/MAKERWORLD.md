@@ -125,7 +125,7 @@ speaker, a small kickstand foot, and an engraved logo. Snap-/screw-together, no 
    network + home location.
 4. Fine-tune anything later at **`http://deskradar.local/`**.
 
-Prefer a file? Download `deskradar-esp32s3.bin` from the
+Prefer a file? Download `DeskRadar-esp32s3.bin` from the
 [GitHub Releases](https://acothebraco.github.io/desk-radar/) and flash to
 offset `0x0` with esptool. Build from source with PlatformIO if you like.
 

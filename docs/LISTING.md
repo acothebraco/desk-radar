@@ -145,11 +145,11 @@ You don't need any toolchain.
 3. Click **Install**, choose the serial port, and pick **Erase + Install** the first time.
 
 **Option B — download the binary**
-- Grab `deskradar-esp32s3.bin` from the
+- Grab `DeskRadar-esp32s3.bin` from the
   [GitHub releases](https://acothebraco.github.io/desk-radar/) and flash it to
   offset `0x0`:
   ```
-  esptool.py --chip esp32s3 write_flash 0x0 deskradar-esp32s3.bin
+  esptool.py --chip esp32s3 write_flash 0x0 DeskRadar-esp32s3.bin
   ```
 
 **Option C — build from source** with PlatformIO:
@@ -181,7 +181,7 @@ pio run -e esp32-s3-amoled-175 -t upload
 Once it's running, you can update wirelessly:
 
 1. Open **`http://deskradar.local/update`** (also linked from the config page).
-2. Upload **`deskradar-ota.bin`** (the *app* image from the GitHub release — **not**
+2. Upload **`DeskRadar-ota.bin`** (the *app* image from the GitHub release — **not**
    the merged flash image).
 3. A progress bar runs and the device reboots into the new firmware.
 

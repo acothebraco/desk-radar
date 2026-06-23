@@ -48,7 +48,7 @@ Makers can flash without installing anything using **ESP Web Tools** (Chrome or 
 1. Open the **[web flasher](https://acothebraco.github.io/desk-radar//)** (the project's GitHub Pages site).
 2. Plug the board in with a USB-C **data** cable and click **Install**.
 
-The flasher is built and published automatically by GitHub Actions ([`.github/workflows/webflasher.yml`](.github/workflows/webflasher.yml)) on every push to `main` — enable it once in **Settings → Pages → Source = GitHub Actions**. Tagged releases (`git tag v1.0.0 && git push origin v1.0.0`) also attach a ready-to-flash `deskradar-esp32s3.bin` to a **GitHub Release** via [`release.yml`](.github/workflows/release.yml). To preview the flasher locally:
+The flasher is built and published automatically by GitHub Actions ([`.github/workflows/webflasher.yml`](.github/workflows/webflasher.yml)) on every push to `main` — enable it once in **Settings → Pages → Source = GitHub Actions**. Tagged releases (`git tag v1.0.0 && git push origin v1.0.0`) also attach a ready-to-flash `DeskRadar-esp32s3.bin` to a **GitHub Release** via [`release.yml`](.github/workflows/release.yml). To preview the flasher locally:
 
 ```bash
 ./scripts/build_webflasher.sh                      # build + merge into web/flash/
