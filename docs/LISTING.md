@@ -140,13 +140,13 @@ engraved logo. No soldering — the Waveshare board carries all the electronics.
 You don't need any toolchain.
 
 **Option A — flash from your browser (easiest)**
-1. Open the **web flasher**: https://socquique.github.io/capsule-radar/ (Chrome or Edge on desktop).
+1. Open the **web flasher**: https://acothebraco.github.io/desk-radar/ (Chrome or Edge on desktop).
 2. Plug the board into your computer with a USB-C **data** cable.
 3. Click **Install**, choose the serial port, and pick **Erase + Install** the first time.
 
 **Option B — download the binary**
 - Grab `deskradar-esp32s3.bin` from the
-  [GitHub releases](https://github.com/socquique/capsule-radar/releases) and flash it to
+  [GitHub releases](https://acothebraco.github.io/desk-radar/) and flash it to
   offset `0x0`:
   ```
   esptool.py --chip esp32s3 write_flash 0x0 deskradar-esp32s3.bin
@@ -220,7 +220,7 @@ Once it's running, you can update wirelessly:
 - Aircraft data: **airplanes.live** (free, **non-commercial / educational** use). Routes:
   **adsbdb.com**. Please keep request rates gentle — this firmware already does.
 - Hardware: **Waveshare ESP32-S3-Touch-AMOLED-1.75**.
-- Firmware & web flasher (open source): **https://github.com/socquique/capsule-radar**
+- Firmware & web flasher (open source): **https://acothebraco.github.io/desk-radar/**
 - Suggested model license (consistent with the non-commercial data sources):
   **CC BY-NC 4.0** (Attribution-NonCommercial).
 

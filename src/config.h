@@ -37,7 +37,7 @@ static const float RANGE_STEPS_KM[] = {10.0f, 20.0f, 30.0f, 50.0f, 100.0f};
 // ---------- ADS-B API (free, non-commercial) ----------
 #define ADSB_PRIMARY_HOST   "api.airplanes.live"   // GET /v2/point/{lat}/{lon}/{radius_nm}
 #define ADSB_FALLBACK_HOST  "api.adsb.lol"          // same readsb format
-#define ADSB_USER_AGENT     "deskradar/1.0 (ESP32-S3 hobby; +https://github.com/socquique/capsule-radar)"
+#define ADSB_USER_AGENT     "deskradar/1.0 (ESP32-S3 hobby; +https://acothebraco.github.io/desk-radar)"
 #define ADSB_HTTPS_INSECURE 1               // 1 = setInsecure() (hobby). 0 = use pinned root CA.
 #define ADSB_MAX_AIRCRAFT   60              // hard cap parsed per poll (protect RAM in busy areas)
 

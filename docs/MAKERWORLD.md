@@ -119,21 +119,21 @@ speaker, a small kickstand foot, and an engraved logo. Snap-/screw-together, no 
 ---
 
 ## Flash & set up (no toolchain)
-1. Open the **web flasher**: https://socquique.github.io/capsule-radar/ (Chrome/Edge desktop).
+1. Open the **web flasher**: https://acothebraco.github.io/desk-radar/ (Chrome/Edge desktop).
 2. Plug the board in with a USB-C **data** cable, click **Install**, pick the serial port.
 3. On first boot, join the **`deskradar-Setup`** WiFi from your phone and enter your
    network + home location.
 4. Fine-tune anything later at **`http://deskradar.local/`**.
 
 Prefer a file? Download `deskradar-esp32s3.bin` from the
-[GitHub Releases](https://github.com/socquique/capsule-radar/releases) and flash to
+[GitHub Releases](https://acothebraco.github.io/desk-radar/) and flash to
 offset `0x0` with esptool. Build from source with PlatformIO if you like.
 
 ---
 
 ## Source code & firmware
 Open source (firmware + simulator + web flasher):
-**https://github.com/socquique/capsule-radar**
+**https://acothebraco.github.io/desk-radar**
 
 ## Credits & data
 - Aircraft data: **airplanes.live** (free, **non-commercial / educational** use) ·
