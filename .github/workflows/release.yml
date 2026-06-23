@@ -25,6 +25,12 @@ jobs:
       - name: Install PlatformIO + esptool
         run: pip install platformio esptool
 
+      - name: Set firmware version from tag
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          sed -i 's/^#define FW_VERSION.*/#define FW_VERSION "'"$VERSION"'"/' src/config.h
+          grep FW_VERSION src/config.h
+
       - name: Build firmware
         run: pio run -e esp32-s3-amoled-175
 
