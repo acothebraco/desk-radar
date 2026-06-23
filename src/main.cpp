@@ -29,6 +29,8 @@
 #include <ArduinoOTA.h>             // OTA firmware update over WiFi (PlatformIO/espota)
 #include <Update.h>                 // browser OTA: self-flash an uploaded .bin
 #include <esp_heap_caps.h>          // largest-free-block metric (heap health)
+#include <HTTPClient.h>
+#include <WiFiClientSecure.h>
 
 // ---- shared state ----
 static std::vector<Aircraft> g_aircraft;      // latest snapshot
@@ -276,7 +278,79 @@ static void applyBrightness() {
 
 // ----------------------------- configuration web --------------------------------
 static WebServer g_web(80);
+static bool versionNewer(String latest, String current) {
+    latest.replace("v", "");
+    current.replace("v", "");
 
+    int l1 = 0, l2 = 0, l3 = 0;
+    int c1 = 0, c2 = 0, c3 = 0;
+
+    sscanf(latest.c_str(), "%d.%d.%d", &l1, &l2, &l3);
+    sscanf(current.c_str(), "%d.%d.%d", &c1, &c2, &c3);
+
+    if (l1 != c1) return l1 > c1;
+    if (l2 != c2) return l2 > c2;
+    return l3 > c3;
+}
+
+static void handleCheckUpdate() {
+    if (WiFi.status() != WL_CONNECTED) {
+        g_web.send(200, "application/json",
+                   "{\"update\":false,\"error\":\"wifi\"}");
+        return;
+    }
+
+    WiFiClientSecure client;
+    client.setInsecure();
+
+    HTTPClient https;
+    https.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
+
+    if (!https.begin(client, "https://api.github.com/repos/acothebraco/desk-radar/releases/latest")) {
+        g_web.send(200, "application/json",
+                   "{\"update\":false,\"error\":\"begin\"}");
+        return;
+    }
+
+    https.addHeader("User-Agent", "DeskRadar");
+
+    int code = https.GET();
+    if (code != 200) {
+        https.end();
+        g_web.send(200, "application/json",
+                   "{\"update\":false,\"error\":\"http\"}");
+        return;
+    }
+
+    String body = https.getString();
+    https.end();
+
+    int tagPos = body.indexOf("\"tag_name\"");
+    if (tagPos < 0) {
+        g_web.send(200, "application/json",
+                   "{\"update\":false,\"error\":\"tag\"}");
+        return;
+    }
+
+    int colon = body.indexOf(":", tagPos);
+    int q1 = body.indexOf("\"", colon);
+    int q2 = body.indexOf("\"", q1 + 1);
+    String latest = body.substring(q1 + 1, q2);
+
+    bool newer = versionNewer(latest, FW_VERSION);
+
+    String json = "{";
+    json += "\"update\":";
+    json += newer ? "true" : "false";
+    json += ",\"current\":\"";
+    json += FW_VERSION;
+    json += "\",\"latest\":\"";
+    json += latest;
+    json += "\",\"url\":\"https://github.com/acothebraco/desk-radar/releases/latest\"";
+    json += "}";
+
+    g_web.send(200, "application/json", json);
+}
 static void handleRoot() {
     const int th = radar::theme();
     const int ranges[] = {10, 15, 25, 30, 50, 100, 150, 250};
@@ -431,7 +505,9 @@ static void handleRoot() {
         "<form method=POST action=/wifi><button class=w>Reset WiFi</button></form></div>"
         "<div class=card><div class=t>Firmware</div>"
         "<p style='color:#9affc8;font-size:13px;margin:0 0 6px'>Version <b>v" FW_VERSION "</b></p>"
-        "<p style='color:#5f7a6c;font-size:12px;margin:0'>Built " __DATE__ " " __TIME__ "</p></div>"
+        "<p style='color:#5f7a6c;font-size:12px;margin:0 0 8px'>Built " __DATE__ " " __TIME__ "</p>"
+        "<button type=button class=sec onclick='cu()'>Check for update</button>"
+        "<p id=upd style='color:#9affc8;font-size:13px;margin:8px 0 0'></p></div>"
         "<p class=ft>Reach me at <code>deskradar.local</code> &middot; <a href=/update style='color:#9affc8'>Firmware update</a> &middot; v" FW_VERSION "</p>"
         "<script>"
         "var C=[%.5f,%.5f];var MAP=L.map('map').setView(C,10);"
@@ -453,6 +529,11 @@ static void handleRoot() {
         "function u(v){fetch('/units?v='+v+'&save=1')}"
         "function al(v){fetch('/alerts?mode='+v+'&save=1')}"
         "function px(v){fetch('/alerts?prox='+v+'&save=1')}"
+        "function cu(){var e=document.getElementById('upd');e.innerHTML='Checking...';"
+        "fetch('/checkupdate').then(r=>r.json()).then(j=>{"
+        "if(j.update){e.innerHTML='New firmware available: <b>v'+j.latest+'</b> · <a style=\"color:#9affc8\" href=\"'+j.url+'\" target=\"_blank\">Open release</a>';}"
+        "else{e.innerHTML='Firmware is up to date.';}"
+        "}).catch(_=>{e.innerHTML='Update check failed.';});}"
         "function gp(c){fetch('/gps?v='+(c?1:0)+'&save=1')}"
         // auto-pick the visitor's time zone from their browser clock (only if they haven't set one)
         "var TZSET=%d;(function(){if(TZSET)return;"
@@ -803,6 +884,7 @@ void setup() {
     g_web.on("/rotate", handleRotate);
     g_web.on("/gps", handleGps);
     g_web.on("/units", handleUnits);
+    g_web.on("/checkupdate", handleCheckUpdate);
     g_web.on("/update", HTTP_GET, handleUpdatePage);
     g_web.on("/update", HTTP_POST,
         []() {
