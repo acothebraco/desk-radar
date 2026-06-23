@@ -51,7 +51,7 @@ jobs:
           cp web/flash/index.html web/flash/manifest.json site/
           # stamp the flasher page + manifest with the firmware version being built
           VER=$(grep -oE 'FW_VERSION "[0-9.]+"' src/config.h | grep -oE '[0-9.]+' | head -1)
-          sed -i "s/__FWVER__/${VER:-dev}/g" site/index.html site/manifest.json
+          sed -i -E "s/__FWVER__/${VER:-dev}/g; s/v[0-9]+\.[0-9]+\.[0-9]+/v${VER:-dev}/g" site/index.html site/manifest.json
           python -m esptool --chip esp32s3 merge_bin -o site/DeskRadar-esp32s3.bin \
             --flash_mode dio --flash_freq 80m --flash_size 16MB \
             0x0     "$B/bootloader.bin" \
