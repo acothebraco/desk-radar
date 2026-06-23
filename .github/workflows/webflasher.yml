@@ -24,6 +24,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 
 
       - uses: actions/setup-python@v5
         with:
@@ -50,9 +52,11 @@ jobs:
           mkdir -p site
           cp web/flash/index.html web/flash/manifest.json site/
           # stamp the flasher page + manifest with latest git tag version
-          git fetch --tags
-          VER="$(git describe --tags --abbrev=0 | sed 's/^v//')"
-          sed -i -E "s/__FWVER__/${VER:-dev}/g; s/v[0-9]+\.[0-9]+\.[0-9]+/v${VER:-dev}/g" site/index.html site/manifest.json
+          git fetch --tags --force
+          VER="$(git tag --sort=-v:refname | head -n 1 | sed 's/^v//')"
+          echo "Webflasher version: $VER"
+          sed -i -E "s/__FWVER__/${VER:-dev}/g; s/v[0-9]+\.[0-9]+\.[0-9]+/v${VER:-dev}/g; s/vdev/v${VER:-dev}/g" site/index.html site/manifest.json
+          grep -n "Installs firmware" site/index.html
           python -m esptool --chip esp32s3 merge_bin -o site/DeskRadar-esp32s3.bin \
             --flash_mode dio --flash_freq 80m --flash_size 16MB \
             0x0     "$B/bootloader.bin" \
