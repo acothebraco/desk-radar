@@ -39,6 +39,9 @@ static volatile bool         g_acDirty = false; // set when a new snapshot is re
 static AdsbClient            g_adsb;
 static RadarSettings         g_settings;
 static WiFiManager           g_wm;
+static unsigned long g_lastRoamCheck = 0;
+static const int WIFI_ROAM_THRESHOLD = -75;
+static const int WIFI_ROAM_MARGIN = 10;
 static int                   g_brightnessDay = BRIGHTNESS_DEFAULT;   // user brightness (web/NVS)
 static int                   g_volume = 60;                          // alert volume 0..100 (web/NVS)
 static bool                  g_muted  = false;                       // mute alert pings
@@ -86,7 +89,46 @@ static const struct { const char *label; const char *tz; int offMin; int dst; } 
     {"Auckland (NZ)",            "NZST-12NZDT,M9.5.0,M4.1.0/3",      720, 1},
 };
 static const int TZOPTS_N = sizeof(TZOPTS) / sizeof(TZOPTS[0]);
+static void checkWiFiRoaming() {
+    if (WiFi.status() != WL_CONNECTED) return;
+    if (millis() - g_lastRoamCheck < 30000UL) return;
+    g_lastRoamCheck = millis();
 
+    int currentRSSI = WiFi.RSSI();
+    if (currentRSSI > WIFI_ROAM_THRESHOLD) return;
+
+    String ssid = WiFi.SSID();
+    int bestRSSI = currentRSSI;
+    int bestChannel = WiFi.channel();
+    uint8_t bestBSSID[6];
+    bool foundBetter = false;
+
+    Serial.printf("[wifi] weak RSSI %d dBm, scanning for better AP...\n", currentRSSI);
+
+    int n = WiFi.scanNetworks(false, true);
+
+    for (int i = 0; i < n; i++) {
+        if (WiFi.SSID(i) == ssid) {
+            int rssi = WiFi.RSSI(i);
+
+            if (rssi > bestRSSI + WIFI_ROAM_MARGIN) {
+                bestRSSI = rssi;
+                bestChannel = WiFi.channel(i);
+                memcpy(bestBSSID, WiFi.BSSID(i), 6);
+                foundBetter = true;
+            }
+        }
+    }
+
+    WiFi.scanDelete();
+
+    if (foundBetter) {
+        Serial.printf("[wifi] roaming: %d dBm -> %d dBm\n", currentRSSI, bestRSSI);
+        WiFi.disconnect(false);
+        delay(200);
+        WiFi.begin(ssid.c_str(), nullptr, bestChannel, bestBSSID, true);
+    }
+}
 // ---- networking task (core 0): fetch + parse, never touches the display ----
 static void adsb_task(void*) {
     std::vector<Aircraft> fresh;
@@ -901,7 +943,8 @@ void setup() {
 
 void loop() {
     display::loop();                // drive LVGL (render dirty areas + run timers)
-    g_wm.process();                 // service the WiFi config portal (non-blocking)
+    g_wm.process();
+    checkWiFiRoaming();                 // service the WiFi config portal (non-blocking)
     g_web.handleClient();           // serve the configuration web page
     if (g_useGps) gps_poll();       // pull NMEA from the LC76G (only when GPS auto-location is on)
 
