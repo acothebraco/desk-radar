@@ -49,8 +49,9 @@ jobs:
           BOOT_APP0="$(find "$HOME/.platformio/packages" -name boot_app0.bin -path '*framework-arduinoespressif32*' | head -1)"
           mkdir -p site
           cp web/flash/index.html web/flash/manifest.json site/
-          # stamp the flasher page + manifest with the firmware version being built
-          VER=$(grep -oE 'FW_VERSION "[0-9.]+"' src/config.h | grep -oE '[0-9.]+' | head -1)
+          # stamp the flasher page + manifest with latest git tag version
+          git fetch --tags
+          VER="$(git describe --tags --abbrev=0 | sed 's/^v//')"
           sed -i -E "s/__FWVER__/${VER:-dev}/g; s/v[0-9]+\.[0-9]+\.[0-9]+/v${VER:-dev}/g" site/index.html site/manifest.json
           python -m esptool --chip esp32s3 merge_bin -o site/DeskRadar-esp32s3.bin \
             --flash_mode dio --flash_freq 80m --flash_size 16MB \
