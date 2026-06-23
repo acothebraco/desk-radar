@@ -54,7 +54,7 @@ jobs:
           files: |
             DeskRadar-esp32s3.bin
             DeskRadar-ota.bin
-          generate_release_notes: true
+          generate_release_notes: false
           body: |
             **First flash (USB):** `DeskRadar-esp32s3.bin` — the full merged image (offset `0x0`).
             - Browser, no toolchain: https://acothebraco.github.io/desk-radar/
