@@ -63,6 +63,7 @@ static volatile bool         g_feedOk = true;                        // ADS-B fe
 static volatile uint32_t     g_lastFeedOkMs = 0;                     // millis() of the last good poll (HUD staleness)
 static volatile uint32_t     g_rebootAtMs = 0;                       // !=0: reboot when millis() reaches it (clean start after WiFi config)
 static String                g_tz = TZ_STR;                          // POSIX timezone (web-configurable, NVS); applied via configTzTime
+static volatile bool         g_standbyMode = false;                  // web power switch: false=active, true=standby
 
 // Web-selectable time zones (label + POSIX TZ). The <option> value is the index; the save
 // handler maps it back to the POSIX string stored in NVS and used by configTzTime at boot.
@@ -136,7 +137,15 @@ static void adsb_task(void*) {
     uint32_t lastPoll = 0;
     uint32_t lastFeedOk = millis();          // self-heal: time of last good (or no-WiFi) poll
     for (;;) {
-        const bool conn = (WiFi.status() == WL_CONNECTED);
+    if (g_standbyMode) {
+        lastFeedOk = millis();
+        g_lastFeedOkMs = millis();
+        lastPoll = 0;
+        vTaskDelay(pdMS_TO_TICKS(1000));
+        continue;
+    }
+
+    const bool conn = (WiFi.status() == WL_CONNECTED);
         if (conn && !wasConnected) {
             // disable WiFi modem power-save: on a mains-powered desk gadget it just adds latency
             // and makes RSSI bounce (feed goes stale -> amber bars) even sitting next to the router.
@@ -228,6 +237,7 @@ static void loadSettings() {
     g_idleDimMs        = p.getUInt("idledim", IDLE_DIM_MS);
     g_units            = p.getInt("units", 0);
     g_tz               = p.getString("tz", TZ_STR);
+    g_standbyMode      = p.getBool("standby", false);
     p.end();
 }
 
@@ -314,7 +324,8 @@ static bool g_idle   = false;   // no touch for a while
 static void applyBrightness() {
     int b = g_brightnessDay;
     if (g_idle  && BRIGHTNESS_IDLE  < b) b = BRIGHTNESS_IDLE;   // idle only dims down
-    if (g_asleep) b = 0;                                         // face-down -> screen off
+    if (g_asleep) b = 0;                                        // face-down -> screen off
+    if (g_standbyMode) b = 0;                                   // standby -> screen off
     display::setBrightness(b);
 }
 
@@ -527,6 +538,8 @@ static void handleRoot() {
         "<label>Time zone</label><select name=tz>%s</select>"
         "<button>Save &amp; restart</button></form></div>"
         "<div class=card><div class=t>Display</div>"
+        "<label><input type=checkbox class=ck %s onchange='st(this.checked)'>DeskRadar active</label>"
+        "<div style='font-size:12px;opacity:.6;margin:-2px 0 8px'>OFF = standby mode, screen off, WiFi stays reachable.</div>"
         "<label>Brightness</label>"
         "<input type=range min=5 max=255 value='%d' oninput='b(this.value,0)' onchange='b(this.value,1)'>"
         "<label>Dim screen after</label><select onchange='d(this.value)'>%s</select>"
@@ -564,6 +577,7 @@ static void handleRoot() {
         "function m(c){fetch('/vol?mute='+(c?1:0)+'&save=1')}"
         "function t(){fetch('/vol?test=1')}"
         "function d(v){fetch('/idle?v='+v+'&save=1')}"
+        "function st(c){fetch('/standby?v='+(c?0:1)+'&save=1')}"
         "function sw(c){fetch('/sweep?v='+(c?1:0)+'&save=1')}"
         "function ap(c){fetch('/airports?v='+(c?1:0)+'&save=1')}"
         "function tl(v){fetch('/trail?v='+v+'&save=1')}"
@@ -587,6 +601,7 @@ static void handleRoot() {
         "if(b>=0)e.selectedIndex=b;})();</script></body></html>",
         g_settings.homeLat, g_settings.homeLon, gpsRow.c_str(), ropts.c_str(), topts.c_str(),
         tzopts.c_str(),
+        g_standbyMode ? "" : "checked",
         g_brightnessDay, iopts.c_str(), g_showSweep ? "checked" : "",
         g_showAirports ? "checked" : "", tlopts.c_str(), rotopts.c_str(), uopts.c_str(),
         g_volume, g_muted ? "checked" : "", aopts.c_str(), popts.c_str(),
@@ -627,6 +642,25 @@ static void handleWifi() {
     delay(400);
     g_wm.resetSettings();
     ESP.restart();
+}
+
+static void handleStandby() {
+    if (g_web.hasArg("v")) {
+        g_standbyMode = g_web.arg("v").toInt() != 0;
+
+        Serial.printf("[power] standby mode %s\n", g_standbyMode ? "ON" : "OFF");
+
+        applyBrightness();
+
+        if (g_web.hasArg("save")) {
+            Preferences p;
+            p.begin("deskradar", false);
+            p.putBool("standby", (bool)g_standbyMode);
+            p.end();
+        }
+    }
+
+    g_web.send(200, "text/plain", "ok");
 }
 
 static void handleBright() {
@@ -916,6 +950,7 @@ void setup() {
     g_web.on("/", handleRoot);
     g_web.on("/save", HTTP_POST, handleSave);
     g_web.on("/wifi", HTTP_POST, handleWifi);
+    g_web.on("/standby", handleStandby);
     g_web.on("/bright", handleBright);
     g_web.on("/vol", handleVol);
     g_web.on("/alerts", handleAlerts);
