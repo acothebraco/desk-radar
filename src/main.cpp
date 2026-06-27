@@ -62,7 +62,14 @@ static float                 g_requeryKm = 0.0f;
 static volatile bool         g_feedOk = true;                        // ADS-B feed healthy? (HUD warning)
 static volatile uint32_t     g_lastFeedOkMs = 0;                     // millis() of the last good poll (HUD staleness)
 static volatile uint32_t     g_rebootAtMs = 0;                       // !=0: reboot when millis() reaches it (clean start after WiFi config)
-static String                g_tz = TZ_STR;                          // POSIX timezone (web-configurable, NVS); applied via configTzTime
+static String                g_tz = TZ_STR;  
+static bool                  g_autoUpdate = false;                   // auto install GitHub firmware updates
+static bool                  g_updateAvailable = false;
+static bool                  g_updateInProgress = false;
+static String                g_latestVersion = "";
+static String                g_latestOtaUrl = "";
+static unsigned long         g_lastAutoUpdateCheck = 0;
+static const unsigned long   AUTO_UPDATE_INTERVAL_MS = 6UL * 60UL * 60UL * 1000UL; // every 6 hours                        // POSIX timezone (web-configurable, NVS); applied via configTzTime
 static volatile bool         g_standbyMode = false;                  // web power switch: false=active, true=standby
 
 // Web-selectable time zones (label + POSIX TZ). The <option> value is the index; the save
@@ -236,6 +243,7 @@ static void loadSettings() {
     g_trailLen         = p.getInt("traillen", 2);
     g_idleDimMs        = p.getUInt("idledim", IDLE_DIM_MS);
     g_units            = p.getInt("units", 0);
+    g_autoUpdate       = p.getBool("autoupd", false);
     g_tz               = p.getString("tz", TZ_STR);
     g_standbyMode      = p.getBool("standby", false);
     p.end();
@@ -345,12 +353,14 @@ static bool versionNewer(String latest, String current) {
     if (l2 != c2) return l2 > c2;
     return l3 > c3;
 }
+static bool getLatestGithubRelease(String &latest, String &otaUrl, String &error) {
+    latest = "";
+    otaUrl = "";
+    error = "";
 
-static void handleCheckUpdate() {
     if (WiFi.status() != WL_CONNECTED) {
-        g_web.send(200, "application/json",
-                   "{\"update\":false,\"error\":\"wifi\"}");
-        return;
+        error = "wifi";
+        return false;
     }
 
     WiFiClientSecure client;
@@ -360,9 +370,8 @@ static void handleCheckUpdate() {
     https.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
 
     if (!https.begin(client, "https://api.github.com/repos/acothebraco/desk-radar/releases/latest")) {
-        g_web.send(200, "application/json",
-                   "{\"update\":false,\"error\":\"begin\"}");
-        return;
+        error = "begin";
+        return false;
     }
 
     https.addHeader("User-Agent", "DeskRadar");
@@ -370,9 +379,8 @@ static void handleCheckUpdate() {
     int code = https.GET();
     if (code != 200) {
         https.end();
-        g_web.send(200, "application/json",
-                   "{\"update\":false,\"error\":\"http\"}");
-        return;
+        error = "http";
+        return false;
     }
 
     String body = https.getString();
@@ -380,17 +388,50 @@ static void handleCheckUpdate() {
 
     int tagPos = body.indexOf("\"tag_name\"");
     if (tagPos < 0) {
-        g_web.send(200, "application/json",
-                   "{\"update\":false,\"error\":\"tag\"}");
-        return;
+        error = "tag";
+        return false;
     }
 
     int colon = body.indexOf(":", tagPos);
     int q1 = body.indexOf("\"", colon);
     int q2 = body.indexOf("\"", q1 + 1);
-    String latest = body.substring(q1 + 1, q2);
+    latest = body.substring(q1 + 1, q2);
+
+    int assetPos = body.indexOf("DeskRadar-ota.bin");
+    if (assetPos >= 0) {
+        int urlPos = body.indexOf("\"browser_download_url\"", assetPos);
+        if (urlPos >= 0) {
+            int urlColon = body.indexOf(":", urlPos);
+            int uq1 = body.indexOf("\"", urlColon);
+            int uq2 = body.indexOf("\"", uq1 + 1);
+            otaUrl = body.substring(uq1 + 1, uq2);
+        }
+    }
+
+    if (otaUrl.length() == 0) {
+        error = "ota_asset";
+        return false;
+    }
+
+    return true;
+}
+
+static void handleCheckUpdate() {
+    String latest, otaUrl, error;
+
+    if (!getLatestGithubRelease(latest, otaUrl, error)) {
+        String json = "{\"update\":false,\"error\":\"";
+        json += error;
+        json += "\"}";
+        g_web.send(200, "application/json", json);
+        return;
+    }
 
     bool newer = versionNewer(latest, FW_VERSION);
+
+    g_updateAvailable = newer;
+    g_latestVersion = latest;
+    g_latestOtaUrl = otaUrl;
 
     String json = "{";
     json += "\"update\":";
@@ -404,6 +445,189 @@ static void handleCheckUpdate() {
 
     g_web.send(200, "application/json", json);
 }
+
+static bool installOtaFromUrl(const String &url, String &error) {
+    error = "";
+
+    if (WiFi.status() != WL_CONNECTED) {
+        error = "wifi";
+        return false;
+    }
+
+    if (g_updateInProgress) {
+        error = "busy";
+        return false;
+    }
+
+    g_updateInProgress = true;
+
+    Serial.printf("[update] downloading OTA: %s\n", url.c_str());
+
+    WiFiClientSecure client;
+    client.setInsecure();
+    client.setTimeout(20000);
+
+    HTTPClient https;
+    https.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
+    https.setTimeout(20000);
+
+    if (!https.begin(client, url)) {
+        error = "begin";
+        g_updateInProgress = false;
+        return false;
+    }
+
+    https.addHeader("User-Agent", "DeskRadar");
+
+    int code = https.GET();
+    if (code != HTTP_CODE_OK) {
+        error = "http_" + String(code);
+        https.end();
+        g_updateInProgress = false;
+        return false;
+    }
+
+    int len = https.getSize();
+    Serial.printf("[update] content length: %d\n", len);
+
+    if (len > 0 && (uint32_t)len > ESP.getFreeSketchSpace()) {
+        error = "no_space";
+        https.end();
+        g_updateInProgress = false;
+        return false;
+    }
+
+    if (!Update.begin(len > 0 ? len : UPDATE_SIZE_UNKNOWN)) {
+        error = "update_begin";
+        https.end();
+        g_updateInProgress = false;
+        return false;
+    }
+
+    WiFiClient *stream = https.getStreamPtr();
+    size_t written = Update.writeStream(*stream);
+
+    Serial.printf("[update] written: %u bytes\n", (unsigned)written);
+
+    if (len > 0 && written != (size_t)len) {
+        error = "short_write";
+        Update.abort();
+        https.end();
+        g_updateInProgress = false;
+        return false;
+    }
+
+    if (!Update.end(true)) {
+        error = "update_end";
+        https.end();
+        g_updateInProgress = false;
+        return false;
+    }
+
+    if (!Update.isFinished()) {
+        error = "not_finished";
+        https.end();
+        g_updateInProgress = false;
+        return false;
+    }
+
+    https.end();
+
+    Serial.println("[update] OTA update successful, rebooting...");
+    return true;
+}
+
+static void handleInstallUpdate() {
+    if (g_updateInProgress) {
+        g_web.send(200, "text/plain", "Update already in progress.");
+        return;
+    }
+
+    String latest, otaUrl, error;
+
+    if (!getLatestGithubRelease(latest, otaUrl, error)) {
+        g_web.send(200, "text/plain", "Update check failed: " + error);
+        return;
+    }
+
+    if (!versionNewer(latest, FW_VERSION)) {
+        g_web.send(200, "text/plain", "No newer firmware available.");
+        return;
+    }
+
+    g_latestVersion = latest;
+    g_latestOtaUrl = otaUrl;
+    g_updateAvailable = true;
+
+    g_web.send(200, "text/plain", "Starting OTA update to " + latest + ". DeskRadar will reboot automatically.");
+    delay(1000);
+
+    if (installOtaFromUrl(otaUrl, error)) {
+        delay(800);
+        ESP.restart();
+    }
+
+    Serial.printf("[update] install failed: %s\n", error.c_str());
+}
+
+static void handleAutoUpdate() {
+    if (g_web.hasArg("v")) {
+        g_autoUpdate = g_web.arg("v").toInt() != 0;
+
+        Preferences p;
+        p.begin("deskradar", false);
+        p.putBool("autoupd", g_autoUpdate);
+        p.end();
+
+        Serial.printf("[update] auto update %s\n", g_autoUpdate ? "ON" : "OFF");
+    }
+
+    g_web.send(200, "text/plain", "ok");
+}
+
+static void checkAutomaticUpdate() {
+    if (!g_autoUpdate) return;
+    if (g_updateInProgress) return;
+    if (WiFi.status() != WL_CONNECTED) return;
+
+    // Wait after boot so WiFi, mDNS, display and web server are fully up.
+    if (millis() < 120000UL) return;
+
+    if (g_lastAutoUpdateCheck != 0 &&
+        millis() - g_lastAutoUpdateCheck < AUTO_UPDATE_INTERVAL_MS) {
+        return;
+    }
+
+    g_lastAutoUpdateCheck = millis();
+
+    Serial.println("[update] automatic GitHub update check");
+
+    String latest, otaUrl, error;
+
+    if (!getLatestGithubRelease(latest, otaUrl, error)) {
+        Serial.printf("[update] automatic check failed: %s\n", error.c_str());
+        return;
+    }
+
+    g_latestVersion = latest;
+    g_latestOtaUrl = otaUrl;
+    g_updateAvailable = versionNewer(latest, FW_VERSION);
+
+    if (!g_updateAvailable) {
+        Serial.printf("[update] already up to date: v%s\n", FW_VERSION);
+        return;
+    }
+
+    Serial.printf("[update] new firmware available: %s, installing...\n", latest.c_str());
+
+    if (installOtaFromUrl(otaUrl, error)) {
+        delay(800);
+        ESP.restart();
+    }
+
+    Serial.printf("[update] automatic install failed: %s\n", error.c_str());
+}
+
 static void handleRoot() {
     const int th = radar::theme();
     const int ranges[] = {10, 15, 25, 30, 50, 100, 150, 250};
@@ -561,7 +785,10 @@ static void handleRoot() {
         "<div class=card><div class=t>Firmware</div>"
         "<p style='color:#9affc8;font-size:13px;margin:0 0 6px'>Version <b>v" FW_VERSION "</b></p>"
         "<p style='color:#5f7a6c;font-size:12px;margin:0 0 8px'>Built " __DATE__ " " __TIME__ "</p>"
+        "<label><input type=checkbox class=ck %s onchange='au(this.checked)'>Auto install firmware updates</label>"
+        "<div style='font-size:12px;opacity:.6;margin:-2px 0 8px'>When enabled, DeskRadar checks GitHub every 6 hours and installs DeskRadar-ota.bin automatically.</div>"
         "<button type=button class=sec onclick='cu()'>Check for update</button>"
+        "<button type=button class=sec onclick='iu()'>Install update now</button>"
         "<p id=upd style='color:#9affc8;font-size:13px;margin:8px 0 0'></p></div>"
         "<p class=ft>Reach me at <code>deskradar.local</code> &middot; <a href=/update style='color:#9affc8'>Firmware update</a> &middot; v" FW_VERSION "</p>"
         "<script>"
@@ -585,6 +812,9 @@ static void handleRoot() {
         "function u(v){fetch('/units?v='+v+'&save=1')}"
         "function al(v){fetch('/alerts?mode='+v+'&save=1')}"
         "function px(v){fetch('/alerts?prox='+v+'&save=1')}"
+        "function au(c){fetch('/autoupdate?v='+(c?1:0)+'&save=1')}"
+        "function iu(){var e=document.getElementById('upd');e.innerHTML='Starting update...';"
+        "fetch('/installupdate').then(r=>r.text()).then(t=>{e.innerHTML=t;}).catch(_=>{e.innerHTML='Update failed.';});}"
         "function cu(){var e=document.getElementById('upd');e.innerHTML='Checking...';"
         "fetch('/checkupdate').then(r=>r.json()).then(j=>{"
         "if(j.update){e.innerHTML='New firmware available: <b>v'+j.latest+'</b> · <a style=\"color:#9affc8\" href=\"'+j.url+'\" target=\"_blank\">Open release</a>';}"
@@ -605,6 +835,7 @@ static void handleRoot() {
         g_brightnessDay, iopts.c_str(), g_showSweep ? "checked" : "",
         g_showAirports ? "checked" : "", tlopts.c_str(), rotopts.c_str(), uopts.c_str(),
         g_volume, g_muted ? "checked" : "", aopts.c_str(), popts.c_str(),
+        g_autoUpdate ? "checked" : "",
         g_settings.homeLat, g_settings.homeLon, (g_tz == TZ_STR ? 0 : 1));
     g_web.send(200, "text/html", buf);
 }
@@ -962,6 +1193,8 @@ void setup() {
     g_web.on("/gps", handleGps);
     g_web.on("/units", handleUnits);
     g_web.on("/checkupdate", handleCheckUpdate);
+    g_web.on("/installupdate", handleInstallUpdate);
+    g_web.on("/autoupdate", handleAutoUpdate);
     g_web.on("/update", HTTP_GET, handleUpdatePage);
     g_web.on("/update", HTTP_POST,
         []() {
@@ -1001,6 +1234,8 @@ void loop() {
         Serial.println("[ota] ready: pio run -e esp32-s3-amoled-175-ota -t upload");
     }
     if (otaUp) ArduinoOTA.handle();
+
+    checkAutomaticUpdate();
 
     // Push a fresh ADS-B snapshot to the radar (copy under the mutex, render outside).
     if (g_acDirty) {
