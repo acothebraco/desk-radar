@@ -615,6 +615,23 @@ static void handleAutoUpdate() {
     g_web.send(200, "text/plain", "ok");
 }
 
+static void handleBatteryStatus() {
+    const bool present = battery_present();
+    const bool charging = present && battery_charging();
+    const int pct = present ? battery_percent() : -1;
+
+    String json = "{";
+    json += "\"present\":";
+    json += present ? "true" : "false";
+    json += ",\"percent\":";
+    json += pct;
+    json += ",\"charging\":";
+    json += charging ? "true" : "false";
+    json += "}";
+
+    g_web.send(200, "application/json", json);
+}
+
 static void checkAutomaticUpdate() {
     if (!g_autoUpdate) return;
     if (g_updateInProgress) return;
@@ -754,7 +771,7 @@ static void handleRoot() {
         gpsRow += "<div style='font-size:12px;opacity:.6;margin:-2px 0 6px'>"
                   "When on, the location above is used until the GPS gets a fix, then it takes over.</div>";
     }
-    static const size_t BUFSZ = 24576;
+    static const size_t BUFSZ = 49152;
     static char *buf = (char *)ps_malloc(BUFSZ);   // PSRAM: keep this big page buffer off the scarce
     if (!buf) return;                              //   internal heap (the contiguous RAM mbedTLS needs)
     snprintf(buf, BUFSZ,
@@ -819,6 +836,10 @@ static void handleRoot() {
         "<div class=card><div class=t>Network</div>"
         "<p style='color:#9affc8;font-size:13px;margin:0 0 4px'>Forget the saved WiFi and reopen the setup portal.</p>"
         "<form method=POST action=/wifi><button class=w>Reset WiFi</button></form></div>"
+        "<div class=card><div class=t>Power</div>"
+        "<p style='color:#9affc8;font-size:13px;margin:0 0 4px'>Battery: <b id=batpct>checking...</b></p>"
+        "<p style='color:#5f7a6c;font-size:12px;margin:0'>Status: <b id=batstate>checking...</b></p>"
+        "</div>"
         "<div class=card><div class=t>Firmware</div>"
         "<p style='color:#9affc8;font-size:13px;margin:0 0 6px'>Version <b>v" FW_VERSION "</b></p>"
         "<p style='color:#5f7a6c;font-size:12px;margin:0 0 8px'>Built " __DATE__ " " __TIME__ "</p>"
@@ -834,38 +855,52 @@ static void handleRoot() {
         "<p id=upd style='color:#9affc8;font-size:13px;margin:8px 0 0'></p></div>"
         "<p class=ft>Reach me at <code>deskradar.local</code> &middot; <a href=/update style='color:#9affc8'>Firmware update</a> &middot; v" FW_VERSION "</p>"
         "<script>"
-        "var C=[%.5f,%.5f];var MAP=L.map('map').setView(C,10);"
-        "L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'(c) OpenStreetMap'}).addTo(MAP);"
+        "function b(v,s){fetch('/bright?v='+v+(s?'&save=1':''));}"
+        "function v(x,s){fetch('/vol?v='+x+(s?'&save=1':''));}"
+        "function m(c){fetch('/vol?mute='+(c?1:0)+'&save=1');}"
+        "function t(){fetch('/vol?test=1');}"
+        "function d(v){fetch('/idle?v='+v+'&save=1');}"
+        "function st(c){fetch('/standby?v='+(c?0:1)+'&save=1');}"
+        "function sw(c){fetch('/sweep?v='+(c?1:0)+'&save=1');}"
+        "function ap(c){fetch('/airports?v='+(c?1:0)+'&save=1');}"
+        "function tl(v){fetch('/trail?v='+v+'&save=1');}"
+        "function ro(v){fetch('/rotate?v='+v+'&save=1');}"
+        "function u(v){fetch('/units?v='+v+'&save=1');}"
+        "function al(v){fetch('/alerts?mode='+v+'&save=1');}"
+        "function px(v){fetch('/alerts?prox='+v+'&save=1');}"
+        "function gp(c){fetch('/gps?v='+(c?1:0)+'&save=1');}"
+
+        "function bs(){fetch('/batterystatus').then(function(r){return r.json();}).then(function(j){"
+        "var p=document.getElementById('batpct');if(p){p.innerHTML=j.present?(j.percent+'%%'):'not detected';}"
+        "var s=document.getElementById('batstate');if(s){s.innerHTML=j.present?(j.charging?'charging':'battery'):'USB / no battery';}"
+        "}).catch(function(e){});}"
+
+        "function au(c){var x=document.getElementById('updauto');if(x){x.innerHTML=c?'ON':'OFF';}fetch('/autoupdate?v='+(c?1:0)+'&save=1');}"
+        "function iu(){var e=document.getElementById('upd');if(e){e.innerHTML='Starting update...';}"
+        "fetch('/installupdate').then(function(r){return r.text();}).then(function(t){if(e){e.innerHTML=t;}}).catch(function(){if(e){e.innerHTML='Update failed.';}});}"
+        "function cu(){var e=document.getElementById('upd');if(e){e.innerHTML='Checking...';}"
+        "fetch('/checkupdate').then(function(r){return r.json();}).then(function(j){"
+        "var l=document.getElementById('updlast');if(l){l.innerHTML=j.error?('Failed: '+j.error):'OK';}"
+        "var f=document.getElementById('updlatest');if(f&&j.latest){f.innerHTML=j.latest;}"
+        "var a=document.getElementById('updauto');if(a){a.innerHTML=j.auto?'ON':'OFF';}"
+        "if(e){e.innerHTML=j.update?('New firmware available: v'+j.latest):'Firmware is up to date.';}"
+        "}).catch(function(){if(e){e.innerHTML='Update check failed.';}});}"
+
+        "function initMap(){"
+        "var C=[%.5f,%.5f];"
+        "var me=document.getElementById('map');"
+        "if(!me){return;}"
+        "if(!window.L){me.innerHTML='Map unavailable - internet needed for map';return;}"
+        "var MAP=L.map('map').setView(C,10);"
+        "L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'OpenStreetMap'}).addTo(MAP);"
         "var MK=L.marker(C,{draggable:true}).addTo(MAP);"
         "function S(p){document.getElementById('lat').value=p.lat.toFixed(5);document.getElementById('lon').value=p.lng.toFixed(5);}"
         "MK.on('dragend',function(){S(MK.getLatLng());});"
         "MAP.on('click',function(e){MK.setLatLng(e.latlng);S(e.latlng);});"
         "setTimeout(function(){MAP.invalidateSize();},300);"
-        "function b(v,s){fetch('/bright?v='+v+(s?'&save=1':''))}"
-        "function v(x,s){fetch('/vol?v='+x+(s?'&save=1':''))}"
-        "function m(c){fetch('/vol?mute='+(c?1:0)+'&save=1')}"
-        "function t(){fetch('/vol?test=1')}"
-        "function d(v){fetch('/idle?v='+v+'&save=1')}"
-        "function st(c){fetch('/standby?v='+(c?0:1)+'&save=1')}"
-        "function sw(c){fetch('/sweep?v='+(c?1:0)+'&save=1')}"
-        "function ap(c){fetch('/airports?v='+(c?1:0)+'&save=1')}"
-        "function tl(v){fetch('/trail?v='+v+'&save=1')}"
-        "function ro(v){fetch('/rotate?v='+v+'&save=1')}"
-        "function u(v){fetch('/units?v='+v+'&save=1')}"
-        "function al(v){fetch('/alerts?mode='+v+'&save=1')}"
-        "function px(v){fetch('/alerts?prox='+v+'&save=1')}"
-        "function au(c){fetch('/autoupdate?v='+(c?1:0)+'&save=1');document.getElementById('updauto').innerHTML=c?'ON':'OFF'}"
-        "function iu(){var e=document.getElementById('upd');e.innerHTML='Starting update...';"
-        "fetch('/installupdate').then(r=>r.text()).then(t=>{e.innerHTML=t;}).catch(_=>{e.innerHTML='Update failed.';});}"
-        "function cu(){var e=document.getElementById('upd');e.innerHTML='Checking...';"
-        "fetch('/checkupdate').then(r=>r.json()).then(j=>{"
-        "document.getElementById('updlast').innerHTML=j.error?('Failed: '+j.error):'OK';"
-        "if(j.latest)document.getElementById('updlatest').innerHTML=j.latest;"
-        "document.getElementById('updauto').innerHTML=j.auto?'ON':'OFF';"
-        "if(j.update){e.innerHTML='New firmware available: <b>v'+j.latest+'</b> · <a style=\"color:#9affc8\" href=\"'+j.url+'\" target=\"_blank\">Open release</a>';}"
-        "else{e.innerHTML='Firmware is up to date.';}"
-        "}).catch(_=>{e.innerHTML='Update check failed.';});}"
-        "function gp(c){fetch('/gps?v='+(c?1:0)+'&save=1')}"
+        "}"
+
+        "window.addEventListener('load',function(){bs();setInterval(bs,30000);initMap();});"
         // auto-pick the visitor's time zone from their browser clock (only if they haven't set one)
         "var TZSET=%d;(function(){if(TZSET)return;"
         "var d=new Date(),j=new Date(d.getFullYear(),0,1).getTimezoneOffset(),"
@@ -1241,6 +1276,7 @@ void setup() {
     g_web.on("/checkupdate", handleCheckUpdate);
     g_web.on("/installupdate", handleInstallUpdate);
     g_web.on("/autoupdate", handleAutoUpdate);
+    g_web.on("/batterystatus", HTTP_GET, handleBatteryStatus);
     g_web.on("/update", HTTP_GET, handleUpdatePage);
     g_web.on("/update", HTTP_POST,
         []() {
