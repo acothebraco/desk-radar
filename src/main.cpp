@@ -69,6 +69,8 @@ static bool                  g_updateInProgress = false;
 static String                g_latestVersion = "";
 static String                g_latestOtaUrl = "";
 static unsigned long         g_lastAutoUpdateCheck = 0;
+static unsigned long         g_lastUpdateCheckMs = 0;
+static String                g_lastUpdateResult = "Never";
 static const unsigned long   AUTO_UPDATE_INTERVAL_MS = 6UL * 60UL * 60UL * 1000UL; // every 6 hours                        // POSIX timezone (web-configurable, NVS); applied via configTzTime
 static volatile bool         g_standbyMode = false;                  // web power switch: false=active, true=standby
 
@@ -353,6 +355,19 @@ static bool versionNewer(String latest, String current) {
     if (l2 != c2) return l2 > c2;
     return l3 > c3;
 }
+
+static String updateCheckAgeText() {
+    if (g_lastUpdateCheckMs == 0) return "Never";
+
+    unsigned long sec = (millis() - g_lastUpdateCheckMs) / 1000UL;
+
+    if (sec < 10) return "just now";
+    if (sec < 60) return String(sec) + " sec ago";
+    if (sec < 3600) return String(sec / 60) + " min ago";
+
+    return String(sec / 3600) + " h ago";
+}
+
 static bool getLatestGithubRelease(String &latest, String &otaUrl, String &error) {
     latest = "";
     otaUrl = "";
@@ -420,14 +435,25 @@ static void handleCheckUpdate() {
     String latest, otaUrl, error;
 
     if (!getLatestGithubRelease(latest, otaUrl, error)) {
+        g_lastUpdateCheckMs = millis();
+        g_lastUpdateResult = "Failed: " + error;
+
         String json = "{\"update\":false,\"error\":\"";
         json += error;
-        json += "\"}";
+        json += "\",\"status\":\"";
+        json += g_lastUpdateResult;
+        json += "\",\"auto\":";
+        json += (g_autoUpdate ? "true" : "false");
+        json += "}";
+
         g_web.send(200, "application/json", json);
         return;
     }
 
     bool newer = versionNewer(latest, FW_VERSION);
+
+    g_lastUpdateCheckMs = millis();
+    g_lastUpdateResult = "OK";
 
     g_updateAvailable = newer;
     g_latestVersion = latest;
@@ -435,12 +461,16 @@ static void handleCheckUpdate() {
 
     String json = "{";
     json += "\"update\":";
-    json += newer ? "true" : "false";
+    json += (newer ? "true" : "false");
     json += ",\"current\":\"";
     json += FW_VERSION;
     json += "\",\"latest\":\"";
     json += latest;
     json += "\",\"url\":\"https://github.com/acothebraco/desk-radar/releases/latest\"";
+    json += ",\"status\":\"";
+    json += g_lastUpdateResult;
+    json += "\",\"auto\":";
+    json += (g_autoUpdate ? "true" : "false");
     json += "}";
 
     g_web.send(200, "application/json", json);
@@ -605,9 +635,15 @@ static void checkAutomaticUpdate() {
     String latest, otaUrl, error;
 
     if (!getLatestGithubRelease(latest, otaUrl, error)) {
+        g_lastUpdateCheckMs = millis();
+        g_lastUpdateResult = "Failed: " + error;
+
         Serial.printf("[update] automatic check failed: %s\n", error.c_str());
         return;
     }
+
+    g_lastUpdateCheckMs = millis();
+    g_lastUpdateResult = "OK";
 
     g_latestVersion = latest;
     g_latestOtaUrl = otaUrl;
@@ -625,6 +661,7 @@ static void checkAutomaticUpdate() {
         ESP.restart();
     }
 
+    g_lastUpdateResult = "Install failed: " + error;
     Serial.printf("[update] automatic install failed: %s\n", error.c_str());
 }
 
@@ -717,7 +754,7 @@ static void handleRoot() {
         gpsRow += "<div style='font-size:12px;opacity:.6;margin:-2px 0 6px'>"
                   "When on, the location above is used until the GPS gets a fix, then it takes over.</div>";
     }
-    static const size_t BUFSZ = 10240;
+    static const size_t BUFSZ = 24576;
     static char *buf = (char *)ps_malloc(BUFSZ);   // PSRAM: keep this big page buffer off the scarce
     if (!buf) return;                              //   internal heap (the contiguous RAM mbedTLS needs)
     snprintf(buf, BUFSZ,
@@ -785,6 +822,11 @@ static void handleRoot() {
         "<div class=card><div class=t>Firmware</div>"
         "<p style='color:#9affc8;font-size:13px;margin:0 0 6px'>Version <b>v" FW_VERSION "</b></p>"
         "<p style='color:#5f7a6c;font-size:12px;margin:0 0 8px'>Built " __DATE__ " " __TIME__ "</p>"
+        "<div style='color:#9affc8;font-size:12px;line-height:1.45;margin:8px 0'>"
+        "Last update check: <b id=updlast>Never</b><br>"
+        "Latest firmware: <b id=updlatest>not checked</b><br>"
+        "Auto update: <b id=updauto>%s</b>"
+        "</div>"
         "<label><input type=checkbox class=ck %s onchange='au(this.checked)'>Auto install firmware updates</label>"
         "<div style='font-size:12px;opacity:.6;margin:-2px 0 8px'>When enabled, DeskRadar checks GitHub every 6 hours and installs DeskRadar-ota.bin automatically.</div>"
         "<button type=button class=sec onclick='cu()'>Check for update</button>"
@@ -812,11 +854,14 @@ static void handleRoot() {
         "function u(v){fetch('/units?v='+v+'&save=1')}"
         "function al(v){fetch('/alerts?mode='+v+'&save=1')}"
         "function px(v){fetch('/alerts?prox='+v+'&save=1')}"
-        "function au(c){fetch('/autoupdate?v='+(c?1:0)+'&save=1')}"
+        "function au(c){fetch('/autoupdate?v='+(c?1:0)+'&save=1');document.getElementById('updauto').innerHTML=c?'ON':'OFF'}"
         "function iu(){var e=document.getElementById('upd');e.innerHTML='Starting update...';"
         "fetch('/installupdate').then(r=>r.text()).then(t=>{e.innerHTML=t;}).catch(_=>{e.innerHTML='Update failed.';});}"
         "function cu(){var e=document.getElementById('upd');e.innerHTML='Checking...';"
         "fetch('/checkupdate').then(r=>r.json()).then(j=>{"
+        "document.getElementById('updlast').innerHTML=j.error?('Failed: '+j.error):'OK';"
+        "if(j.latest)document.getElementById('updlatest').innerHTML=j.latest;"
+        "document.getElementById('updauto').innerHTML=j.auto?'ON':'OFF';"
         "if(j.update){e.innerHTML='New firmware available: <b>v'+j.latest+'</b> · <a style=\"color:#9affc8\" href=\"'+j.url+'\" target=\"_blank\">Open release</a>';}"
         "else{e.innerHTML='Firmware is up to date.';}"
         "}).catch(_=>{e.innerHTML='Update check failed.';});}"
@@ -835,6 +880,7 @@ static void handleRoot() {
         g_brightnessDay, iopts.c_str(), g_showSweep ? "checked" : "",
         g_showAirports ? "checked" : "", tlopts.c_str(), rotopts.c_str(), uopts.c_str(),
         g_volume, g_muted ? "checked" : "", aopts.c_str(), popts.c_str(),
+        g_autoUpdate ? "ON" : "OFF",
         g_autoUpdate ? "checked" : "",
         g_settings.homeLat, g_settings.homeLon, (g_tz == TZ_STR ? 0 : 1));
     g_web.send(200, "text/html", buf);
