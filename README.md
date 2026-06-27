@@ -90,6 +90,16 @@ scripts/             build_webflasher.sh (merge firmware -> single .bin)
 docs/                hardware / data-source / architecture notes
 ```
 
+## Release Notes
+
+### DeskRadar v1.4.5
+
+- Added Standby Mode ON/OFF switch on configuration page
+- Standby turns display off
+- ADS-B/radar fetching pauses
+- WiFi and web configuration stay reachable
+- DeskRadar can be reactivated from the configuration page
+
 ## Data & license
 
 Aircraft data: **airplanes.live** (free, **non-commercial / educational** — exactly this project; be polite with request cadence). Routes: **adsbdb.com** (free). Personal/hobby project intended for a future MakerWorld release (3D-printed enclosure + this firmware).
