@@ -69,5 +69,6 @@ bool sweepEnabled();
 void setAirportsEnabled(bool on);                // show/hide airport markers on the scope
 bool airportsEnabled();
 void setTrailLength(int level);                  // 0=off 1=short 2=medium 3=long (aircraft trails + flow)
+void setMaxOnScreen(int n);                       // how many (nearest) aircraft to draw on the scope
 
 } // namespace radar

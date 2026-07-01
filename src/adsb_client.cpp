@@ -7,6 +7,7 @@
 // then keeps only the nearest ~20 for display.
 #include "adsb_client.h"
 #include "config.h"
+#include "geo.h"           // haversineKm — keep the nearest N aircraft
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
 #include <HTTPClient.h>
@@ -80,24 +81,42 @@ bool AdsbClient::fetchFrom(const char* host, std::vector<Aircraft>& out) {
     if (arr.isNull()) arr = doc["aircraft"].as<JsonArrayConst>();
     if (arr.isNull()) return false;
 
+    // Keep the ADSB_MAX_AIRCRAFT *nearest* aircraft (not just the first ones the feed happens to
+    // list), so busy areas still show the traffic closest to you. We gate by distance BEFORE
+    // parsing the strings, so the hundreds of far-away aircraft never allocate anything.
     std::vector<Aircraft> tmp;
+    std::vector<float>     dist;             // parallel array: km from home for each kept aircraft
+    tmp.reserve(ADSB_MAX_AIRCRAFT);
+    dist.reserve(ADSB_MAX_AIRCRAFT);
     const uint32_t now = millis();
     for (JsonObjectConst a : arr) {
-        if ((int)tmp.size() >= ADSB_MAX_AIRCRAFT) break;   // hard cap: protect RAM
+        if (a["lat"].isNull() || a["lon"].isNull()) continue;   // need a position
+        const double lat = a["lat"].as<double>();
+        const double lon = a["lon"].as<double>();
 
-        if (a["lat"].isNull() || a["lon"].isNull()) continue;  // need a position
+        // alt_baro is the string "ground" for aircraft on the ground; skip them if hide-ground is on.
+        const bool onGround = a["alt_baro"].is<const char*>();
+        if (_hideGround && onGround) continue;
+
+        const float d = (float)geo::haversineKm(_lat, _lon, lat, lon);
+
+        // nearest-N gate: if the buffer is full and this one isn't closer than the farthest kept,
+        // drop it now — before any string allocation.
+        int farIdx = -1;
+        if ((int)tmp.size() >= ADSB_MAX_AIRCRAFT) {
+            farIdx = 0;
+            for (int i = 1; i < (int)dist.size(); ++i) if (dist[i] > dist[farIdx]) farIdx = i;
+            if (d >= dist[farIdx]) continue;
+        }
 
         Aircraft ac;
-        ac.hex    = (const char*)(a["hex"] | "");
+        ac.hex = (const char*)(a["hex"] | "");
         if (ac.hex.length() == 0) continue;
         ac.flight = String((const char*)(a["flight"] | "")); ac.flight.trim();
         ac.type   = (const char*)(a["t"] | "");
-        ac.lat    = a["lat"].as<double>();
-        ac.lon    = a["lon"].as<double>();
-
-        if (a["alt_baro"].is<const char*>()) { ac.onGround = true; ac.altBaro = 0; }  // "ground"
-        else                                  ac.altBaro = a["alt_baro"] | 0.0f;
-
+        ac.lat = lat; ac.lon = lon;
+        ac.onGround = onGround;
+        ac.altBaro  = onGround ? 0.0f : (a["alt_baro"] | 0.0f);
         ac.track    = a["track"].is<float>() ? a["track"].as<float>() : (a["true_heading"] | NAN);
         ac.gs       = a["gs"] | NAN;
         ac.baroRate = a["baro_rate"] | NAN;
@@ -106,7 +125,8 @@ bool AdsbClient::fetchFrom(const char* host, std::vector<Aircraft>& out) {
         ac.military = ((a["dbFlags"] | 0u) & 0x1) != 0;
         ac.lastUpdateMs = now;
 
-        tmp.push_back(std::move(ac));
+        if (farIdx >= 0) { tmp[farIdx] = std::move(ac); dist[farIdx] = d; }   // replace the farthest kept
+        else             { tmp.push_back(std::move(ac)); dist.push_back(d); }
     }
 
     out.swap(tmp);
