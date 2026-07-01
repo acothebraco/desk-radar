@@ -771,6 +771,19 @@ static void handleRoot() {
         gpsRow += "<div style='font-size:12px;opacity:.6;margin:-2px 0 6px'>"
                   "When on, the location above is used until the GPS gets a fix, then it takes over.</div>";
     }
+    String updateLastText;
+    if (g_lastUpdateCheckMs == 0) {
+    updateLastText = "Never";
+}   else {
+    updateLastText = g_lastUpdateResult.length() ? g_lastUpdateResult : "OK";
+    updateLastText += " (";
+    updateLastText += updateCheckAgeText();
+    updateLastText += ")";
+}
+
+    String latestText = g_latestVersion.length() ? g_latestVersion : "not checked";
+    String autoUpdateText = g_autoUpdate ? "ON" : "OFF";
+
     static const size_t BUFSZ = 49152;
     static char *buf = (char *)ps_malloc(BUFSZ);   // PSRAM: keep this big page buffer off the scarce
     if (!buf) return;                              //   internal heap (the contiguous RAM mbedTLS needs)
@@ -844,8 +857,8 @@ static void handleRoot() {
         "<p style='color:#9affc8;font-size:13px;margin:0 0 6px'>Version <b>v" FW_VERSION "</b></p>"
         "<p style='color:#5f7a6c;font-size:12px;margin:0 0 8px'>Built " __DATE__ " " __TIME__ "</p>"
         "<div style='color:#9affc8;font-size:12px;line-height:1.45;margin:8px 0'>"
-        "Last update check: <b id=updlast>Never</b><br>"
-        "Latest firmware: <b id=updlatest>not checked</b><br>"
+        "Last update check: <b id=updlast>%s</b><br>"
+        "Latest firmware: <b id=updlatest>%s</b><br>"
         "Auto update: <b id=updauto>%s</b>"
         "</div>"
         "<label><input type=checkbox class=ck %s onchange='au(this.checked)'>Auto install firmware updates</label>"
@@ -880,7 +893,7 @@ static void handleRoot() {
         "fetch('/installupdate').then(function(r){return r.text();}).then(function(t){if(e){e.innerHTML=t;}}).catch(function(){if(e){e.innerHTML='Update failed.';}});}"
         "function cu(){var e=document.getElementById('upd');if(e){e.innerHTML='Checking...';}"
         "fetch('/checkupdate').then(function(r){return r.json();}).then(function(j){"
-        "var l=document.getElementById('updlast');if(l){l.innerHTML=j.error?('Failed: '+j.error):'OK';}"
+        "var l=document.getElementById('updlast');if(l){l.innerHTML=j.error?('Failed: '+j.error):'OK (just now)';}"
         "var f=document.getElementById('updlatest');if(f&&j.latest){f.innerHTML=j.latest;}"
         "var a=document.getElementById('updauto');if(a){a.innerHTML=j.auto?'ON':'OFF';}"
         "if(e){e.innerHTML=j.update?('New firmware available: v'+j.latest):'Firmware is up to date.';}"
@@ -915,7 +928,9 @@ static void handleRoot() {
         g_brightnessDay, iopts.c_str(), g_showSweep ? "checked" : "",
         g_showAirports ? "checked" : "", tlopts.c_str(), rotopts.c_str(), uopts.c_str(),
         g_volume, g_muted ? "checked" : "", aopts.c_str(), popts.c_str(),
-        g_autoUpdate ? "ON" : "OFF",
+        updateLastText.c_str(),
+        latestText.c_str(),
+        autoUpdateText.c_str(),
         g_autoUpdate ? "checked" : "",
         g_settings.homeLat, g_settings.homeLon, (g_tz == TZ_STR ? 0 : 1));
     g_web.send(200, "text/html", buf);
