@@ -42,6 +42,12 @@ static WiFiManager           g_wm;
 static unsigned long g_lastRoamCheck = 0;
 static const int WIFI_ROAM_THRESHOLD = -75;
 static const int WIFI_ROAM_MARGIN = 10;
+static unsigned long g_wifiLostSince = 0;
+static unsigned long g_lastReconnectTry = 0;
+static bool          g_recoveryApActive = false;
+
+static const unsigned long WIFI_RECONNECT_EVERY_MS = 30000UL;      // try every 30 sec
+static const unsigned long WIFI_RECOVERY_AP_AFTER_MS = 120000UL;   // open AP after 2 min
 static int                   g_brightnessDay = BRIGHTNESS_DEFAULT;   // user brightness (web/NVS)
 static int                   g_volume = 60;                          // alert volume 0..100 (web/NVS)
 static bool                  g_muted  = false;                       // mute alert pings
@@ -137,6 +143,70 @@ static void checkWiFiRoaming() {
         WiFi.disconnect(false);
         delay(200);
         WiFi.begin(ssid.c_str(), nullptr, bestChannel, bestBSSID, true);
+    }
+}
+
+static void startRecoveryAp() {
+    if (g_recoveryApActive) return;
+
+    Serial.println("[wifi] starting recovery AP");
+
+    WiFi.mode(WIFI_AP_STA);
+
+    const bool ok = WiFi.softAP("deskradar-Recovery", "deskradar");
+    String ip = WiFi.softAPIP().toString();
+
+    if (ok) {
+        g_recoveryApActive = true;
+        Serial.printf("[wifi] recovery AP active: deskradar-Recovery / password deskradar / http://%s/\n", ip.c_str());
+    } else {
+        Serial.println("[wifi] recovery AP failed");
+    }
+}
+
+static void stopRecoveryAp() {
+    if (!g_recoveryApActive) return;
+
+    Serial.println("[wifi] stopping recovery AP");
+
+    WiFi.softAPdisconnect(true);
+    WiFi.mode(WIFI_STA);
+
+    g_recoveryApActive = false;
+}
+
+static void checkWiFiRecovery() {
+    const bool connected = (WiFi.status() == WL_CONNECTED);
+    const unsigned long now = millis();
+
+    if (connected) {
+        g_wifiLostSince = 0;
+        g_lastReconnectTry = 0;
+
+        if (g_recoveryApActive) {
+            stopRecoveryAp();
+        }
+
+        return;
+    }
+
+    if (g_wifiLostSince == 0) {
+        g_wifiLostSince = now;
+        Serial.println("[wifi] connection lost");
+    }
+
+    if (now - g_lastReconnectTry >= WIFI_RECONNECT_EVERY_MS) {
+        g_lastReconnectTry = now;
+
+        Serial.println("[wifi] reconnect attempt");
+
+        WiFi.disconnect(false);
+        delay(100);
+        WiFi.reconnect();
+    }
+
+    if (!g_recoveryApActive && now - g_wifiLostSince >= WIFI_RECOVERY_AP_AFTER_MS) {
+        startRecoveryAp();
     }
 }
 // ---- networking task (core 0): fetch + parse, never touches the display ----
@@ -847,6 +917,7 @@ static void handleRoot() {
         "<label>Proximity alert</label><select onchange='px(this.value)'>%s</select>"
         "<button type=button class=sec onclick='t()'>Test ping</button></div>"
         "<div class=card><div class=t>Network</div>"
+        "<p style='color:#5f7a6c;font-size:12px;margin:8px 0 0'>If WiFi is lost for 2 minutes, DeskRadar opens recovery AP <b>deskradar-Recovery</b> password <b>deskradar</b>.</p>"
         "<p style='color:#9affc8;font-size:13px;margin:0 0 4px'>Forget the saved WiFi and reopen the setup portal.</p>"
         "<form method=POST action=/wifi><button class=w>Reset WiFi</button></form></div>"
         "<div class=card><div class=t>Power</div>"
@@ -1237,6 +1308,10 @@ void setup() {
     // --- WiFi (captive portal, non-blocking) ------------------------------
     // First boot opens the "deskradar-Setup" AP to enter WiFi creds. Non-blocking
     // so the radar keeps animating while you configure WiFi from your phone.
+    WiFi.mode(WIFI_STA);
+    WiFi.setSleep(false);
+    WiFi.setAutoReconnect(true);
+
     g_wm.setConfigPortalBlocking(false);
     g_wm.setTitle("Desk Radar");
     // light phosphor-green theme for the captive portal (small CSS, injected into <head>)
@@ -1309,8 +1384,9 @@ void setup() {
 void loop() {
     display::loop();                // drive LVGL (render dirty areas + run timers)
     g_wm.process();
-    checkWiFiRoaming();                 // service the WiFi config portal (non-blocking)
-    g_web.handleClient();           // serve the configuration web page
+    checkWiFiRecovery();
+    checkWiFiRoaming();
+    g_web.handleClient();
     if (g_useGps) gps_poll();       // pull NMEA from the LC76G (only when GPS auto-location is on)
 
     // scheduled reboot after a fresh WiFi config (see setSaveConfigCallback)
