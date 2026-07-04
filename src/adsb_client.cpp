@@ -95,8 +95,12 @@ bool AdsbClient::fetchFrom(const char* host, std::vector<Aircraft>& out) {
         const double lon = a["lon"].as<double>();
 
         // alt_baro is the string "ground" for aircraft on the ground; skip them if hide-ground is on.
-        const bool onGround = a["alt_baro"].is<const char*>();
+        const bool  onGround = a["alt_baro"].is<const char*>();
+        const float altFt    = onGround ? 0.0f : (a["alt_baro"] | 0.0f);
         if (_hideGround && onGround) continue;
+        // optional filters (applied before the cap, so slots only go to matching aircraft)
+        if (_minAltFt > 0.0f && (onGround || altFt < _minAltFt)) continue;
+        if (_milOnly && (((a["dbFlags"] | 0u) & 0x1) == 0)) continue;
 
         const float d = (float)geo::haversineKm(_lat, _lon, lat, lon);
 
@@ -116,7 +120,7 @@ bool AdsbClient::fetchFrom(const char* host, std::vector<Aircraft>& out) {
         ac.type   = (const char*)(a["t"] | "");
         ac.lat = lat; ac.lon = lon;
         ac.onGround = onGround;
-        ac.altBaro  = onGround ? 0.0f : (a["alt_baro"] | 0.0f);
+        ac.altBaro  = altFt;
         ac.track    = a["track"].is<float>() ? a["track"].as<float>() : (a["true_heading"] | NAN);
         ac.gs       = a["gs"] | NAN;
         ac.baroRate = a["baro_rate"] | NAN;

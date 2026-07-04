@@ -10,6 +10,8 @@ public:
     void setHome(double lat, double lon) { _lat = lat; _lon = lon; }
     void setRange(float km) { _rangeKm = km; }
     void setHideGround(bool h) { _hideGround = h; }   // skip on-ground aircraft during parse
+    void setMinAltFt(float ft) { _minAltFt = ft; }    // skip aircraft below this altitude (0 = off)
+    void setMilitaryOnly(bool m) { _milOnly = m; }    // keep only military-flagged aircraft
 
     // Fetch + parse. Returns true on success and fills `out` (replaces contents).
     // On failure, leaves `out` untouched and returns false (caller keeps last good).
@@ -23,5 +25,7 @@ private:
     double _lat = 0, _lon = 0;
     float  _rangeKm = 15.0f;
     bool   _hideGround = false;
+    float  _minAltFt = 0.0f;
+    bool   _milOnly = false;
     uint32_t _lastOkMs = 0;
 };
