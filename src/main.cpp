@@ -31,6 +31,7 @@
 #include <esp_heap_caps.h>          // largest-free-block metric (heap health)
 #include <HTTPClient.h>
 #include <WiFiClientSecure.h>
+#include <esp_wifi.h>
 
 // ---- shared state ----
 static std::vector<Aircraft> g_aircraft;      // latest snapshot
@@ -1036,9 +1037,21 @@ static void handleSave() {
 static void handleWifi() {
     g_web.send(200, "text/html",
         "<body style='background:#06100a;color:#ffb23c;font-family:sans-serif;padding:24px'>"
-        "WiFi reset. Connect to the <b>deskradar-Setup</b> network to reconfigure.</body>");
-    delay(400);
+        "WiFi reset. Saved WiFi credentials are being erased. "
+        "After reboot, connect to the <b>deskradar-Setup</b> network to reconfigure.</body>");
+
+    delay(500);
+
+    Serial.println("[wifi] reset requested - erasing saved WiFi credentials");
+
     g_wm.resetSettings();
+
+    WiFi.disconnect(true, true);
+    delay(200);
+
+    esp_wifi_restore();
+    delay(600);
+
     ESP.restart();
 }
 
