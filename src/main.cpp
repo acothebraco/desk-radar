@@ -58,6 +58,8 @@ static uint32_t              g_idleDimMs = IDLE_DIM_MS;              // dim afte
 static bool                  g_showSweep = true;                     // rotating sweep line on/off (web/NVS)
 static int                   g_units = 0;                            // 0=Aviation 1=Metric 2=Imperial (web/NVS)
 static bool                  g_showAirports = true;                  // airport markers on/off (web/NVS)
+static int                   g_minAltFt = 0;                         // minimum aircraft altitude filter, ft; 0 = off
+static bool                  g_milOnly = false;                      // only show military-flagged aircraft                  
 static int                   g_rotation = 0;                         // display rotation 0/1/2/3 = 0/90/180/270 (web/NVS)
 static bool                  g_useGps = false;                       // auto-set home from the LC76G GPS (-G variant) (web/NVS)
 static int                   g_trailLen = 2;                         // aircraft trails 0=off 1=short 2=med 3=long (web/NVS)
@@ -317,6 +319,8 @@ static void loadSettings() {
     g_idleDimMs        = p.getUInt("idledim", IDLE_DIM_MS);
     g_units            = p.getInt("units", 0);
     g_autoUpdate       = p.getBool("autoupd", false);
+    g_minAltFt         = p.getInt("minalt", 0);
+    g_milOnly          = p.getBool("milonly", false);
     g_tz               = p.getString("tz", TZ_STR);
     g_standbyMode      = p.getBool("standby", false);
     p.end();
@@ -801,6 +805,23 @@ static void handleRoot() {
         snprintf(o, sizeof(o), "<option value=%d%s>%s</option>", i, i == g_rotation ? " selected" : "", rnames[i]);
         rotopts += o;
     }
+
+    const struct { int ft; const char *lbl; } mavals[] = {
+    {0, "Off"},
+    {5000, "&gt; 5,000 ft"},
+    {10000, "&gt; 10,000 ft"},
+    {20000, "&gt; 20,000 ft"},
+    {33000, "&gt; 33,000 ft"},
+};
+
+    String maopts;
+    for (auto &mv : mavals) {
+    char o[96];
+    snprintf(o, sizeof(o), "<option value=%d%s>%s</option>",
+             mv.ft, mv.ft == g_minAltFt ? " selected" : "", mv.lbl);
+    maopts += o;
+}
+    
     const char *tlnames[] = {"Off", "Short", "Medium", "Long"};
     String tlopts;
     for (int i = 0; i < 4; ++i) {
@@ -907,6 +928,8 @@ static void handleRoot() {
         "<label>Dim screen after</label><select onchange='d(this.value)'>%s</select>"
         "<label><input type=checkbox class=ck %s onchange='sw(this.checked)'>Show radar sweep</label>"
         "<label><input type=checkbox class=ck %s onchange='ap(this.checked)'>Show airports</label>"
+        "<label>Minimum altitude</label><select onchange='ma(this.value)'>%s</select>"
+        "<label><input type=checkbox class=ck %s onchange='mo(this.checked)'>Military aircraft only</label>"
         "<label>Aircraft trails</label><select onchange='tl(this.value)'>%s</select>"
         "<label>Screen rotation (USB-C position)</label><select onchange='ro(this.value)'>%s</select>"
         "<label>Units</label><select onchange='u(this.value)'>%s</select></div>"
@@ -948,6 +971,8 @@ static void handleRoot() {
         "function st(c){fetch('/standby?v='+(c?0:1)+'&save=1');}"
         "function sw(c){fetch('/sweep?v='+(c?1:0)+'&save=1');}"
         "function ap(c){fetch('/airports?v='+(c?1:0)+'&save=1');}"
+        "function ma(v){fetch('/altmin?v='+v+'&save=1');}"
+        "function mo(c){fetch('/milonly?v='+(c?1:0)+'&save=1');}"
         "function tl(v){fetch('/trail?v='+v+'&save=1');}"
         "function ro(v){fetch('/rotate?v='+v+'&save=1');}"
         "function u(v){fetch('/units?v='+v+'&save=1');}"
@@ -998,7 +1023,8 @@ static void handleRoot() {
         tzopts.c_str(),
         g_standbyMode ? "" : "checked",
         g_brightnessDay, iopts.c_str(), g_showSweep ? "checked" : "",
-        g_showAirports ? "checked" : "", tlopts.c_str(), rotopts.c_str(), uopts.c_str(),
+        g_showAirports ? "checked" : "", maopts.c_str(), g_milOnly ? "checked" : "",
+        tlopts.c_str(), rotopts.c_str(), uopts.c_str(),
         g_volume, g_muted ? "checked" : "", aopts.c_str(), popts.c_str(),
         updateLastText.c_str(),
         latestText.c_str(),
@@ -1159,6 +1185,38 @@ static void handleSweep() {   // show/hide the rotating sweep line (live)
             p.end();
         }
     }
+    g_web.send(200, "text/plain", "ok");
+}
+
+static void handleAltMin() {
+    if (g_web.hasArg("v")) {
+        g_minAltFt = constrain((int)g_web.arg("v").toInt(), 0, 60000);
+        g_adsb.setMinAltFt((float)g_minAltFt);
+
+        if (g_web.hasArg("save")) {
+            Preferences p;
+            p.begin("deskradar", false);
+            p.putInt("minalt", g_minAltFt);
+            p.end();
+        }
+    }
+
+    g_web.send(200, "text/plain", "ok");
+}
+
+static void handleMilOnly() {
+    if (g_web.hasArg("v")) {
+        g_milOnly = g_web.arg("v").toInt() != 0;
+        g_adsb.setMilitaryOnly(g_milOnly);
+
+        if (g_web.hasArg("save")) {
+            Preferences p;
+            p.begin("deskradar", false);
+            p.putBool("milonly", g_milOnly);
+            p.end();
+        }
+    }
+
     g_web.send(200, "text/plain", "ok");
 }
 
@@ -1358,6 +1416,8 @@ void setup() {
     if (queryKm < 50.0f)  queryKm = 50.0f;
     if (queryKm > 200.0f) queryKm = 200.0f;
     g_adsb.begin(g_settings.homeLat, g_settings.homeLon, queryKm);
+    g_adsb.setMinAltFt((float)g_minAltFt);
+    g_adsb.setMilitaryOnly(g_milOnly);
     g_ac_mutex = xSemaphoreCreateMutex();
     xTaskCreatePinnedToCore(adsb_task, "adsb", 16384, nullptr, 1, nullptr, 0);  // TLS needs a big stack
 
@@ -1372,7 +1432,9 @@ void setup() {
     g_web.on("/idle", handleIdle);
     g_web.on("/sweep", handleSweep);
     g_web.on("/airports", handleAirports);
-    g_web.on("/trail", handleTrail);
+    g_web.on("/altmin", handleAltMin);
+    g_web.on("/milonly", handleMilOnly);
+g_web.on("/trail", handleTrail);
     g_web.on("/rotate", handleRotate);
     g_web.on("/gps", handleGps);
     g_web.on("/units", handleUnits);
