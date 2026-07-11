@@ -32,6 +32,7 @@
 #include <HTTPClient.h>
 #include <WiFiClientSecure.h>
 #include <esp_wifi.h>
+#include <nvs.h>
 
 // ---- shared state ----
 static std::vector<Aircraft> g_aircraft;      // latest snapshot
@@ -1074,6 +1075,17 @@ static void handleWifi() {
 
     WiFi.disconnect(true, true);
     delay(200);
+
+    nvs_handle_t nvs;
+    esp_err_t err = nvs_open("nvs.net80211", NVS_READWRITE, &nvs);
+    if (err == ESP_OK) {
+        nvs_erase_all(nvs);
+        nvs_commit(nvs);
+        nvs_close(nvs);
+        Serial.println("[wifi] erased nvs.net80211");
+    } else {
+        Serial.printf("[wifi] nvs.net80211 open failed: %d\n", (int)err);
+    }
 
     esp_wifi_restore();
     delay(600);
