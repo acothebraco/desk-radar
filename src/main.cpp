@@ -363,13 +363,17 @@ static void checkAudioEvents() {
     first = false;
 }
 
-// Feed query radius: wider than the display range (so off-range traffic shows as edge
-// arrows) AND wide enough to cover the proximity-alert circle (else an alert radius larger
-// than the query would never fire), clamped to keep busy-airspace downloads bounded.
+// Feed query radius: wider than the display range and wide enough to cover
+// the proximity-alert circle, clamped to keep busy-airspace downloads bounded.
 static float queryRadiusKm() {
-    float km = g_settings.rangeKm * ADSB_QUERY_MULT;
-    if (g_proximityKm > 0.0f && g_proximityKm * 1.2f > km) km = g_proximityKm * 1.2f;
-    return constrain(km, ADSB_QUERY_MIN_KM, ADSB_QUERY_MAX_KM);
+    float q = g_settings.rangeKm * ADSB_QUERY_MULT;
+
+    if (g_proximityKm > 0.0f) {
+        float pq = g_proximityKm * 1.2f;
+        if (pq > q) q = pq;
+    }
+
+    return constrain(q, ADSB_QUERY_MIN_KM, ADSB_QUERY_MAX_KM);
 }
 
 // Double-tap zoom: change the display range, persist it, and ask adsb_task to
