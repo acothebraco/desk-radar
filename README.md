@@ -14,7 +14,7 @@ A live **ADS-B aircraft radar** for the **Waveshare ESP32-S3-Touch-AMOLED-1.75**
 
 ## Features
 
-- **Live traffic** from [airplanes.live](https://airplanes.live) (free, non-commercial; fallback adsb.lol), updated every couple of seconds. Memory-safe streaming parser with a hard aircraft cap.
+- **Live traffic** from [airplanes.live](https://airplanes.live/), with automatic failover to [adsb.fi](https://adsb.fi/) and [adsb.lol](https://adsb.lol/). Each service has its own usage policies and rate limits; the client backs off when refused or rate-limited. Memory-safe streaming parser with a hard aircraft cap.
 - **Four themes** (long-press the screen to cycle, or pick on the web; remembered across reboots):
   - **Phosphor** — green-on-black radar scope: rings, animated sweep, aircraft glyphs rotated by heading and color-coded by altitude, fading trails, emergency halo.
   - **Dragon** — DBZ Dragon Radar skin: green gradient + grid, the 7 nearest aircraft as yellow "dragon balls" emitting waves, off-range traffic as edge arrows pointing its way, orange target rings.
@@ -27,7 +27,13 @@ A live **ADS-B aircraft radar** for the **Waveshare ESP32-S3-Touch-AMOLED-1.75**
 - **Real-time clock** (PCF85063): keeps the time/date across power loss, so the clock is right even before/without WiFi; re-synced from NTP when online.
 - **Smart brightness**: configurable idle auto-dim (no touch), and **face-down sleep** (QMI8658 IMU — flip it over to turn the screen off).
 - **Configuration web page** at `http://deskradar.local/` — center point, display range, theme, live brightness slider, WiFi reset. Settings persist in NVS.
-- **First-boot WiFi setup** via a captive portal (`deskradar-Setup`).
+- **First-boot WiFi setup** via a captive portal (`deskradar-Setup`), plus `deskradar-Recovery` after about 60 seconds offline (`http://192.168.4.1/`).
+
+## Current release
+
+**v1.5.3** — ADS-B multi-provider support, resilient WiFi recovery and LVGL display timing fix. See [release notes](RELEASE_NOTES_v1.5.3.md) and [changelog](CHANGELOG.md).
+
+**Aircraft data credit:** [airplanes.live](https://airplanes.live/), [adsb.fi](https://adsb.fi/), [adsb.lol](https://adsb.lol/). adsb.fi requires attribution/link and permits personal, non-commercial use of its public API. Follow each provider's access and rate-limit policies.
 
 ## Hardware
 
@@ -39,7 +45,7 @@ Waveshare **ESP32-S3-Touch-AMOLED-1.75**: ESP32-S3R8 (8 MB PSRAM, 16 MB flash), 
 pio run -e esp32-s3-amoled-175 -t upload     # build + flash over USB-C
 pio device monitor -b 115200                  # serial log
 ```
-On first flash you may need to hold **BOOT** then tap **RESET**. After flashing, on first boot connect your phone to the **`deskradar-Setup`** WiFi and enter your home network — real aircraft appear within seconds.
+On first flash the ESP32-S3 may require BOOT while connecting USB (this board has BOOT and PWR buttons, not a dedicated RESET button). After flashing, on first boot connect your phone to the **`deskradar-Setup`** WiFi and enter your home network — real aircraft appear within seconds.
 
 ## Flash from your browser (no toolchain)
 

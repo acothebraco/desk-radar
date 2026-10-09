@@ -55,11 +55,4 @@ jobs:
             DeskRadar-esp32s3.bin
             DeskRadar-ota.bin
           generate_release_notes: false
-          body: |
-            **First flash (USB):** `DeskRadar-esp32s3.bin` — the full merged image (offset `0x0`).
-            - Browser, no toolchain: https://acothebraco.github.io/desk-radar/
-            - Or: `esptool.py --chip esp32s3 write_flash 0x0 DeskRadar-esp32s3.bin`
-
-            **Update over WiFi (no cable):** `DeskRadar-ota.bin` — the app-only image.
-            Open `http://deskradar.local/update` on the device and upload this file.
-            (Do **not** upload the merged image there.)
+          body_path: RELEASE_NOTES_v1.5.3.md

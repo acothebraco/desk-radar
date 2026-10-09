@@ -1,7 +1,7 @@
 # Data source — ADS-B feed
 
-## Primary: airplanes.live (free, no key)
-Independent ADS-B/MLAT aggregator. **Educational / non-commercial use only** — fits this project. Be a good citizen: poll every 1–2 s max, send a descriptive `User-Agent`.
+## Primary: airplanes.live (access may require contributor approval)
+Independent community-owned ADS-B/MLAT aggregator. Requests may be refused (HTTP 403) when not authorized. DeskRadar automatically backs off and tries the alternatives. Respect the operator's access and rate-limit policies.
 
 ### Endpoint (position + radius)
 ```
@@ -28,11 +28,23 @@ JSON object; the aircraft list is under key **`ac`** (older/raw readsb files use
 | `t` / `type`   | aircraft type (e.g. B738) when present   | detail card |
 | `dbFlags`      | bitfield (military, etc.)                | "interesting" alerts |
 
-### Fallback: adsb.lol
-Same readsb format. `GET https://api.adsb.lol/v2/point/{lat}/{lon}/{radius_nm}`. Wire it as an automatic failover if airplanes.live errors/times out.
+### Secondary: adsb.fi
 
-### Not used: OpenSky
-Now requires OAuth2 client-credentials and has tighter anonymous limits — awkward for an always-on embedded device. Keep as a documented alternative only.
+Public endpoint: `https://opendata.adsb.fi/api/v3/lat/{lat}/lon/{lon}/dist/{radius_nm}`.
+Credit: [adsb.fi](https://adsb.fi/). **Attribution and a link to adsb.fi are required** by the provider; public API use is personal and non-commercial, with a documented 1 request/second limit.
+
+## Fallback: adsb.lol
+
+Endpoint: `https://api.adsb.lol/v2/point/{lat}/{lon}/{radius_nm}`.
+Credit: [adsb.lol](https://adsb.lol/). Public request limits can vary; DeskRadar adjusts its request rate after HTTP 429.
+
+## Provider control
+
+- HTTP 403: temporarily park provider with escalating cooldowns rather than retrying continuously.
+- HTTP 429: increase per-provider request spacing and honor `Retry-After`.
+- Recover to normal request spacing after successful polls.
+- HTTPS uses limited connection and handshake timeouts; HTTP/1.0 avoids raw chunked JSON decoding problems.
+- User-Agent identifies DeskRadar and its current firmware version.
 
 ## On-device math (implemented in src/geo.h)
 For each aircraft, given home `(lat0, lon0)` and range `R_km` (outer ring):

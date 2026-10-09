@@ -28,39 +28,69 @@ void AdsbClient::begin(double homeLat, double homeLon, float rangeKm) {
     _lat = homeLat; _lon = homeLon; _rangeKm = rangeKm;
 }
 
+struct AdsbProvider {const char* host; const char* path;};
+static const AdsbProvider providers[ADSB_PROVIDER_COUNT]={
+ {ADSB_PRIMARY_HOST,"/v2/point/%.4f/%.4f/%.0f"},
+ {ADSB_OPENDATA_HOST,"/api/v3/lat/%.4f/lon/%.4f/dist/%.0f"},
+ {ADSB_FALLBACK_HOST,"/v2/point/%.4f/%.4f/%.0f"}
+};
+
 bool AdsbClient::poll(std::vector<Aircraft>& out) {
-    if (WiFi.status() != WL_CONNECTED) return false;
-    // Prefer the primary host, and give it a quick second try before touching the fallback:
-    // the primary is reliable in practice, while the fallback can be slow to time out from
-    // some networks (turning one transient primary blip into a long no-data gap + amber HUD).
-    if (fetchFrom(ADSB_PRIMARY_HOST, out)) return true;
-    if (fetchFrom(ADSB_PRIMARY_HOST, out)) return true;   // transient blip -> retry the healthy host
-    return fetchFrom(ADSB_FALLBACK_HOST, out);            // last resort
+    if (WiFi.status()!=WL_CONNECTED) return false;
+    bool attempted=false;
+    for (int i=0;i<ADSB_PROVIDER_COUNT;++i) {
+        if (_pacer.cooling(i,millis())) continue;
+        attempted=true;
+        if(fetchFrom(i,out)){_lastPollSkipped=false;return true;}
+    }
+    _lastPollSkipped=!attempted;
+    return false;
 }
 
-bool AdsbClient::fetchFrom(const char* host, std::vector<Aircraft>& out) {
-    const double nm = _rangeKm * 0.539957;            // km -> nautical miles (API radius unit)
-    char url[160];
-    snprintf(url, sizeof(url), "https://%s/v2/point/%.4f/%.4f/%.0f", host, _lat, _lon, nm);
+// Stream::readBytes retries transient empty TLS reads until timeout.
+class JsonNetworkStream : public Stream {
+public:
+ explicit JsonNetworkStream(Stream& s):src(s){}
+ int available() override{return src.available();}
+ int read() override{return src.read();}
+ int peek() override{return src.peek();}
+ void flush() override{src.flush();}
+ size_t write(uint8_t) override{return 0;}
+private: Stream& src;
+};
 
+bool AdsbClient::fetchFrom(int slot, std::vector<Aircraft>& out) {
+    const char* host=providers[slot].host;
+    const double nm=_rangeKm*0.539957;
+    char path[100],url[180];
+    snprintf(path,sizeof(path),providers[slot].path,_lat,_lon,nm);
+    snprintf(url,sizeof(url),"https://%s%s",host,path);
     WiFiClientSecure client;
 #if ADSB_HTTPS_INSECURE
-    client.setInsecure();                              // hobby: skip cert validation
-#else
-    // client.setCACert(ROOT_CA_PEM);                  // production: pin the root CA
+    client.setInsecure();
 #endif
-
+    client.setHandshakeTimeout(TLS_HANDSHAKE_S);
     HTTPClient http;
     http.setReuse(false);
-    http.setConnectTimeout(6000);    // fail reasonably fast: a slow host must not block the
-    http.setTimeout(8000);           // task (and the user's route/photo lookups) for too long
-    if (!http.begin(client, url)) { Serial.printf("[adsb] begin failed (%s)\n", host); return false; }
-    http.addHeader("User-Agent", ADSB_USER_AGENT);
-    http.addHeader("Accept", "application/json");
-
-    const int code = http.GET();
-    if (code != 200) { Serial.printf("[adsb] HTTP %d (%s)\n", code, host); http.end(); return false; }
-
+    // Chunked JSON is not a plain socket JSON stream. HTTP/1.0 avoids chunk encoding.
+    http.useHTTP10(true);
+    http.setConnectTimeout(6000);
+    http.setTimeout(8000);
+    _pacer.onAttempt(slot,millis());
+    if(!http.begin(client,url)) {Serial.printf("[adsb] begin failed: %s\n",host);return false;}
+    http.setUserAgent(ADSB_USER_AGENT);
+    http.addHeader("Accept","application/json");
+    const char* names[]={"Retry-After"};
+    http.collectHeaders(names,1);
+    int code=http.GET();
+    if(code>0) _lastResponseMs=millis();
+    if(code!=200){
+        Serial.printf("[adsb] HTTP %d (%s)\n",code,host);
+        if(code==403)_pacer.onRefused(slot,millis());
+        else if(code==429)_pacer.onLimited(slot,millis(),http.header("Retry-After").toInt());
+        else if(code>0)_pacer.onUnusable(slot);
+        http.end();return false;
+    }
     // Only keep the fields we use -> much smaller parsed document.
     JsonDocument filter(&s_jsonPsram);
     const char* keys[] = { "ac", "aircraft" };
@@ -72,14 +102,18 @@ bool AdsbClient::fetchFrom(const char* host, std::vector<Aircraft>& out) {
             filter[k][0][f] = true;
 
     JsonDocument doc(&s_jsonPsram);
-    DeserializationError err = deserializeJson(doc, http.getStream(),
+    JsonNetworkStream response(http.getStream());
+    response.setTimeout(8000);
+    DeserializationError err = deserializeJson(doc, response,
                                                DeserializationOption::Filter(filter));
     http.end();
-    if (err) return false;
+    if (err) { Serial.printf("[adsb] JSON error %s (%s)\n",err.c_str(),host);_pacer.onUnusable(slot);return false; }
 
     JsonArrayConst arr = doc["ac"].as<JsonArrayConst>();
     if (arr.isNull()) arr = doc["aircraft"].as<JsonArrayConst>();
-    if (arr.isNull()) return false;
+    if (arr.isNull()) {Serial.printf("[adsb] no aircraft array (%s)\n",host);_pacer.onUnusable(slot);return false;}
+    _lastHost=host;
+    _pacer.onOk(slot);
 
     // Keep the ADSB_MAX_AIRCRAFT *nearest* aircraft (not just the first ones the feed happens to
     // list), so busy areas still show the traffic closest to you. We gate by distance BEFORE

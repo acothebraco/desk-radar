@@ -29,6 +29,7 @@ static lv_color_t        *s_buf1 = nullptr;
 static lv_color_t        *s_buf2 = nullptr;
 
 static volatile uint32_t s_frameCount = 0;   // rendered frames (last-flush), for FPS measurement
+static uint32_t s_lastLvTickMs = 0;    // wall-clock baseline for LVGL internal tick
 uint32_t display_frames() { return s_frameCount; }
 
 static volatile uint8_t s_rot = 0;           // display rotation: 0/1/2/3 = 0°/90°/180°/270°
@@ -130,6 +131,7 @@ bool begin() {
     Serial.println("[display] panel up; init LVGL...");
 
     lv_init();
+    s_lastLvTickMs = millis();  // start LVGL time only after initialization
 
     // Draw scratch in INTERNAL DMA RAM: rendering anti-aliased graphics into PSRAM is
     // slow (that, not QSPI bandwidth, was the bottleneck). Keep the active buffer in fast
@@ -172,7 +174,18 @@ bool begin() {
     return true;
 }
 
-void loop() { lv_timer_handler(); }
+void loop() {
+    // LV_TICK_CUSTOM=0: LVGL needs a manual timebase on Arduino/FreeRTOS.
+    // Advance before handling timers so boot animation + radar refresh keep running.
+    // Unsigned subtraction is safe across the millis() wraparound.
+    const uint32_t now = millis();
+    const uint32_t delta = now - s_lastLvTickMs;
+    if (delta) {
+        s_lastLvTickMs = now;
+        lv_tick_inc(delta);
+    }
+    lv_timer_handler();
+}
 
 void setBrightness(uint8_t v) { if (s_gfx) s_gfx->setBrightness(v); }
 

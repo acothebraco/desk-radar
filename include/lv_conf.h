@@ -39,16 +39,12 @@
 #define LV_DISP_DEF_REFR_PERIOD 16   /* ms; ~60 Hz cap (SPI bandwidth is the real limit) */
 #define LV_INDEV_DEF_READ_PERIOD 20  /* ms */
 
-/* On the device, drive LVGL's tick from Arduino's millis() — no separate ticker.
-   On the native SDL simulator there is no Arduino.h, so fall back to lv_tick_inc()
-   (called from the sim main loop). */
-#if defined(ARDUINO) || defined(ESP_PLATFORM)
-#  define LV_TICK_CUSTOM 1
-#  define LV_TICK_CUSTOM_INCLUDE "Arduino.h"
-#  define LV_TICK_CUSTOM_SYS_TIME_EXPR (millis())
-#else
-#  define LV_TICK_CUSTOM 0
-#endif
+/* Use LVGL's internal tick counter consistently on ALL build targets.
+   On the ESP32 display::loop() advances it with millis() deltas;
+   the SDL simulator advances it in its own loop.  The former conditional
+   LV_TICK_CUSTOM=1 was not consistent between library translation units:
+   lv_tick_get() remained at 0, freezing the boot timer and radar view. */
+#define LV_TICK_CUSTOM 0
 
 #define LV_DPI_DEF 130
 

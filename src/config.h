@@ -1,7 +1,7 @@
 #pragma once
 // Desk Radar — build & user configuration.
 
-#define FW_VERSION "1.4.6"   // shown on the web config page + Stats screen; bump on release
+#define FW_VERSION "1.5.3"   // shown on the web config page + Stats screen; bump on release
 // Edit pins below: replace every -1 with the value from the Waveshare factory demo
 // (see docs/HARDWARE.md and docs/SETUP.md). Do NOT guess them.
 
@@ -43,8 +43,17 @@ static const float RANGE_STEPS_KM[] = {10.0f, 20.0f, 30.0f, 50.0f, 100.0f};
 
 // ---------- ADS-B API (free, non-commercial) ----------
 #define ADSB_PRIMARY_HOST   "api.airplanes.live"   // GET /v2/point/{lat}/{lon}/{radius_nm}
+#define ADSB_OPENDATA_HOST  "opendata.adsb.fi"
+#define ADSB_PROVIDER_COUNT 3
 #define ADSB_FALLBACK_HOST  "api.adsb.lol"          // same readsb format
-#define ADSB_USER_AGENT     "deskradar/1.0 (ESP32-S3 hobby; +https://acothebraco.github.io/desk-radar)"
+#define ADSB_USER_AGENT     "DeskRadar/" FW_VERSION " (ESP32-S3 hobby; +https://github.com/acothebraco/desk-radar)"
+#define TLS_HANDSHAKE_S 10
+#define ADSB_COOLDOWN_403_MS 900000UL
+#define ADSB_COOLDOWN_403_MAX_MS 21600000UL
+#define ADSB_SPACING_STEP_MS 4000UL
+#define ADSB_SPACING_MAX_MS 60000UL
+#define ADSB_SPACING_EASE_OKS 3
+#define ADSB_FEED_STALE_MS 60000UL
 #define ADSB_HTTPS_INSECURE 1               // 1 = setInsecure() (hobby). 0 = use pinned root CA.
 #define ADSB_MAX_AIRCRAFT   60              // hard cap parsed per poll (protect RAM in busy areas)
 

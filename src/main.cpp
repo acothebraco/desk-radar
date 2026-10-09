@@ -49,7 +49,7 @@ static unsigned long g_lastReconnectTry = 0;
 static bool          g_recoveryApActive = false;
 
 static const unsigned long WIFI_RECONNECT_EVERY_MS = 30000UL;      // try every 30 sec
-static const unsigned long WIFI_RECOVERY_AP_AFTER_MS = 120000UL;   // open AP after 2 min
+static const unsigned long WIFI_RECOVERY_AP_AFTER_MS = 60000UL;   // recovery after 60 sec
 static int                   g_brightnessDay = BRIGHTNESS_DEFAULT;   // user brightness (web/NVS)
 static int                   g_volume = 60;                          // alert volume 0..100 (web/NVS)
 static bool                  g_muted  = false;                       // mute alert pings
@@ -199,13 +199,13 @@ static void checkWiFiRecovery() {
         Serial.println("[wifi] connection lost");
     }
 
-    if (now - g_lastReconnectTry >= WIFI_RECONNECT_EVERY_MS) {
+    if (g_lastReconnectTry == 0 || now - g_lastReconnectTry >= WIFI_RECONNECT_EVERY_MS) {
         g_lastReconnectTry = now;
 
         Serial.println("[wifi] reconnect attempt");
 
-        WiFi.disconnect(false);
-        delay(100);
+        // Preserve the recovery AP during STA reconnection.
+        if (g_recoveryApActive && WiFi.getMode() != WIFI_AP_STA) WiFi.mode(WIFI_AP_STA);
         WiFi.reconnect();
     }
 
@@ -241,6 +241,8 @@ static void adsb_task(void*) {
         wasConnected = conn;
         // self-heal: a long feed outage while WiFi is up usually means the internal heap
         // fragmented and the TLS handshake can't allocate -> reboot to recover (settings persist).
+        const uint32_t lastHttpMs = g_adsb.lastResponseMs();
+        if (lastHttpMs && (int32_t)(lastHttpMs - lastFeedOk) > 0) lastFeedOk = lastHttpMs;
         if (!conn) lastFeedOk = millis();
         else if (millis() - lastFeedOk > 180000UL) {
             Serial.println("[adsb] feed stuck >180s with WiFi up -> restarting to recover");
@@ -264,7 +266,7 @@ static void adsb_task(void*) {
                 // poll() flips to the alternate host on failure, so consecutive polls already
                 // alternate hosts; a single transient miss is absorbed by the failCount window.
                 if (g_adsb.poll(fresh)) {
-                    Serial.printf("[adsb] fetched %u aircraft\n", (unsigned)fresh.size());
+                    Serial.printf("[adsb] fetched %u aircraft from %s\n", (unsigned)fresh.size(), g_adsb.lastHost());
                     failCount = 0;
                     g_feedOk = true;
                     lastFeedOk = nowMs;
@@ -274,6 +276,8 @@ static void adsb_task(void*) {
                         g_acDirty = true;
                         xSemaphoreGive(g_ac_mutex);
                     }
+                } else if (g_adsb.lastPollSkipped()) {
+                    if ((int32_t)(nowMs - g_adsb.lastOkMs()) > (int32_t)ADSB_FEED_STALE_MS) g_feedOk = false;
                 } else {
                     Serial.println("[adsb] poll failed");
                     if (++failCount >= 5) g_feedOk = false;   // sustained outage -> HUD warning
@@ -955,7 +959,7 @@ static void handleRoot() {
         "<label>Proximity alert</label><select onchange='px(this.value)'>%s</select>"
         "<button type=button class=sec onclick='t()'>Test ping</button></div>"
         "<div class=card><div class=t>Network</div>"
-        "<p style='color:#5f7a6c;font-size:12px;margin:8px 0 0'>If WiFi is lost for 2 minutes, DeskRadar opens recovery AP <b>deskradar-Recovery</b> password <b>deskradar</b>.</p>"
+        "<p style='color:#5f7a6c;font-size:12px;margin:8px 0 0'>If WiFi is lost for about 60 seconds, DeskRadar opens recovery AP <b>deskradar-Recovery</b> password <b>deskradar</b>.</p>"
         "<p style='color:#9affc8;font-size:13px;margin:0 0 4px'>Forget the saved WiFi and reopen the setup portal.</p>"
         "<form method=POST action=/wifi><button class=w>Reset WiFi</button></form></div>"
         "<div class=card><div class=t>Power</div>"
@@ -1485,6 +1489,16 @@ g_web.on("/trail", handleTrail);
 
 void loop() {
     display::loop();                // drive LVGL (render dirty areas + run timers)
+    // Temporary boot-screen diagnostic: proves the Arduino loop and LVGL time move.
+    static uint32_t lastUiDiagMs = 0;
+    const uint32_t uiDiagNow = millis();
+    if (uiDiagNow - lastUiDiagMs >= 5000UL) {
+        lastUiDiagMs = uiDiagNow;
+        Serial.printf("[ui-diag] loop alive, uptime=%lu ms, lv_tick=%lu, frames=%lu, standby=%d\n",
+                      (unsigned long)uiDiagNow, (unsigned long)lv_tick_get(),
+                      (unsigned long)display_frames(), (int)g_standbyMode);
+    }
+
     g_wm.process();
     checkWiFiRecovery();
     checkWiFiRoaming();

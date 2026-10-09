@@ -3,6 +3,8 @@
 // the readsb JSON into a vector<Aircraft>. See docs/DATA_SOURCE.md.
 #include <vector>
 #include "aircraft.h"
+#include "config.h"
+#include "adsb_pacing.h"
 
 class AdsbClient {
 public:
@@ -18,10 +20,17 @@ public:
     bool poll(std::vector<Aircraft>& out);
 
     uint32_t lastOkMs() const { return _lastOkMs; }
+    uint32_t lastResponseMs() const { return _lastResponseMs; }
+    bool lastPollSkipped() const { return _lastPollSkipped; }
+    const char* lastHost() const { return _lastHost ? _lastHost : "?"; }
 
 private:
-    bool fetchFrom(const char* host, std::vector<Aircraft>& out);   // one host, one attempt
+    bool fetchFrom(int slot, std::vector<Aircraft>& out);
 
+    AdsbPacer _pacer;
+    bool _lastPollSkipped = false;
+    uint32_t _lastResponseMs = 0;
+    const char* _lastHost = nullptr;
     double _lat = 0, _lon = 0;
     float  _rangeKm = 15.0f;
     bool   _hideGround = false;
