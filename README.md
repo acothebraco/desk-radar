@@ -99,4 +99,4 @@ docs/                hardware / data-source / architecture notes
 
 ## Data & license
 
-Aircraft data: **airplanes.live** (free, **non-commercial / educational** — exactly this project; be polite with request cadence). Routes: **adsbdb.com** (free). Personal/hobby project intended for a future MakerWorld release (3D-printed enclosure + this firmware).
+Aircraft data: **airplanes.live** (free, **non-commercial / educational** — exactly this project; be polite with request cadence). Routes: **adsbdb.com** (free), adsb.fi, adsb.lol. Personal/hobby project intended for a future MakerWorld release (3D-printed enclosure + this firmware).
