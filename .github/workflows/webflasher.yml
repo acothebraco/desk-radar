@@ -42,13 +42,18 @@ jobs:
       - name: Install PlatformIO + esptool
         run: pip install platformio esptool
         
-      - name: Set firmware version from latest tag
+      - name: Read firmware version from source
         run: |
-          git fetch --tags --force
-          VER="$(git tag --sort=-v:refname | head -n 1 | sed 's/^v//')"
-          echo "FWVER=${VER:-dev}" >> "$GITHUB_ENV"
-          sed -i 's/^#define FW_VERSION.*/#define FW_VERSION "'"${VER:-dev}"'"/' src/config.h
-          grep FW_VERSION src/config.h
+          VER="$(sed -n 's/^#define FW_VERSION "\([^"]*\)".*/\1/p' src/config.h | head -n 1)"
+          test -n "$VER"
+          echo "FWVER=$VER" >> "$GITHUB_ENV"
+          echo "Building DeskRadar firmware v$VER from src/config.h"
+      - name: Test feed and altitude filters
+        run: bash tests/run_host_tests.sh
+
+      - name: Check web UI template
+        run: python tests/check_web_template.py
+
       - name: Build firmware
         run: pio run -e esp32-s3-amoled-175
 
@@ -58,9 +63,8 @@ jobs:
           BOOT_APP0="$(find "$HOME/.platformio/packages" -name boot_app0.bin -path '*framework-arduinoespressif32*' | head -1)"
           mkdir -p site
           cp web/flash/index.html web/flash/manifest.json site/
-          # stamp the flasher page + manifest with latest git tag version
-          git fetch --tags --force
-          VER="$(git tag --sort=-v:refname | head -n 1 | sed 's/^v//')"
+          # Stamp with the version actually compiled, not an older git tag.
+          VER="$FWVER"
           echo "Webflasher version: $VER"
           sed -i -E "s/__FWVER__/${VER:-dev}/g; s/v[0-9]+\.[0-9]+\.[0-9]+/v${VER:-dev}/g; s/vdev/v${VER:-dev}/g" site/index.html site/manifest.json
           grep -n "Installs firmware" site/index.html

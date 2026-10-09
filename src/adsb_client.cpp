@@ -8,6 +8,7 @@
 #include "adsb_client.h"
 #include "config.h"
 #include "geo.h"           // haversineKm — keep the nearest N aircraft
+#include "altitude_filter.h"
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
 #include <HTTPClient.h>
@@ -133,7 +134,7 @@ bool AdsbClient::fetchFrom(int slot, std::vector<Aircraft>& out) {
         const float altFt    = onGround ? 0.0f : (a["alt_baro"] | 0.0f);
         if (_hideGround && onGround) continue;
         // optional filters (applied before the cap, so slots only go to matching aircraft)
-        if (_minAltFt > 0.0f && (onGround || altFt < _minAltFt)) continue;
+        if (!altitude_filter_accepts(onGround, altFt, _minAltFt, _maxAltFt)) continue;
         if (_milOnly && (((a["dbFlags"] | 0u) & 0x1) == 0)) continue;
 
         const float d = (float)geo::haversineKm(_lat, _lon, lat, lon);

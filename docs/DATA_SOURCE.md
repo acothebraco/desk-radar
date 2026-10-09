@@ -53,3 +53,11 @@ For each aircraft, given home `(lat0, lon0)` and range `R_km` (outer ring):
 3. **Project** to screen: `r_px = (dist_km / R_km) * R_px_outer`; with north-up,
    `x = cx + r_px * sin(bearing)`, `y = cy - r_px * cos(bearing)`.
 4. Drop aircraft beyond `R_km` (or clamp to the rim with a "beyond range" marker).
+
+## Weather sources (v1.5.4)
+
+- Forecast: [Open-Meteo](https://open-meteo.com/) (current conditions and three-day outlook; 30-minute cache).
+- Precipitation: [RainViewer](https://www.rainviewer.com/api.html) (PNG precipitation tiles; five-minute cache).
+- Satellite cloud types: [EUMETSAT EUMETView](https://view.eumetsat.int/) (Cloud Type RGB WMS product; ten-minute cache).
+
+Each data provider determines its own permitted use, attribution, coverage, rate limits and uptime; a missing image is not proof of clear skies.

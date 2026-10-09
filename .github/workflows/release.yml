@@ -33,6 +33,12 @@ jobs:
           grep FW_VERSION src/config.h
           grep -n "Installs firmware" web/flash/index.html
 
+      - name: Test feed and altitude filters
+        run: bash tests/run_host_tests.sh
+
+      - name: Check web UI template
+        run: python tests/check_web_template.py
+
       - name: Build firmware
         run: pio run -e esp32-s3-amoled-175
 
@@ -55,4 +61,4 @@ jobs:
             DeskRadar-esp32s3.bin
             DeskRadar-ota.bin
           generate_release_notes: false
-          body_path: RELEASE_NOTES_v1.5.3.md
+          body_path: RELEASE_NOTES_v1.5.4.md

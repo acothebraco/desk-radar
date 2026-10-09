@@ -4,11 +4,18 @@
 #include "radar_view.h"
 #include "route.h"
 #include "photo.h"
+#include "weather.h"
+#include "weather_image.h"
 #include "config.h"
 #include <lvgl.h>
 #include <stdio.h>
 #include <stdint.h>
 #include <string.h>
+#include <stdlib.h>
+#include <time.h>
+#if defined(ESP_PLATFORM)
+#include <esp_heap_caps.h>
+#endif
 
 #define UI_GREEN lv_color_hex(0x1DFF86)
 #define UI_INK   lv_color_hex(0xEAFFF3)
@@ -18,7 +25,16 @@
 #define UI_EMERG lv_color_hex(0xFF5A3C)
 
 static lv_obj_t *s_tv = nullptr;
-static lv_obj_t *s_tileRadar = nullptr, *s_tileList = nullptr, *s_tileStats = nullptr;
+static lv_obj_t *s_tileRadar = nullptr, *s_tileList = nullptr, *s_tileStats = nullptr, *s_tileWeather = nullptr;
+static lv_obj_t *s_wxTitle=nullptr, *s_wxCanvas=nullptr, *s_wxMessage=nullptr, *s_wxFooter=nullptr, *s_wxModeLabel=nullptr;
+static lv_obj_t *s_wxOverlay[5]={};
+static lv_obj_t *s_fcTemp=nullptr, *s_fcCondition=nullptr, *s_fcMetrics=nullptr, *s_fcUpdated=nullptr;
+static lv_obj_t *s_fcDay[3]={}, *s_fcDetails[3]={};
+static int s_weatherMode=0; // 0=precip, 1=satellite, 2=forecast
+static uint16_t *s_wxUiBuffer=nullptr;
+static uint32_t s_seenImageVersion[2]={};
+static int s_canvasImageKind=-1; // force copy when switching between cached sources
+
 static lv_obj_t *s_card = nullptr, *s_cardTitle = nullptr, *s_cardL = nullptr, *s_cardR = nullptr;
 static lv_obj_t *s_cardRoute = nullptr;
 static lv_obj_t *s_photo = nullptr, *s_photoCredit = nullptr;   // aircraft photo above the card
@@ -235,6 +251,94 @@ static void list_btn_cb(lv_event_t *e) {
     lv_obj_set_tile_id(s_tv, 0, 0, LV_ANIM_ON);   // jump back to the radar
 }
 
+
+// ---------------------------------------------------------------- weather
+// LVGL objects are touched only by the display task; network workers own their
+// own buffers. A copy into the UI-owned canvas avoids concurrent JPEG/PNG writes.
+static void wx_show(lv_obj_t *o,bool yes) {
+    if(!o)return;
+    if(yes)lv_obj_clear_flag(o,LV_OBJ_FLAG_HIDDEN);
+    else lv_obj_add_flag(o,LV_OBJ_FLAG_HIDDEN);
+}
+static float wx_temp(float c) {return s_units==2 ? c*1.8f+32.0f : c;}
+static const char *wx_temp_unit() {return s_units==2 ? "F" : "C";}
+static float wx_wind(float kmh) {return s_units==0 ? kmh*0.539957f : (s_units==2 ? kmh*0.621371f : kmh);}
+static const char *wx_wind_unit() {return s_units==0 ? "kt" : (s_units==2 ? "mph" : "km/h");}
+static void wx_refresh(void) {
+    if(!s_tileWeather)return;
+    const bool forecast=s_weatherMode==2;
+    wx_show(s_fcTemp,forecast);wx_show(s_fcCondition,forecast);
+    wx_show(s_fcMetrics,forecast);wx_show(s_fcUpdated,forecast);
+    for(int i=0;i<3;i++){wx_show(s_fcDay[i],forecast);wx_show(s_fcDetails[i],forecast);}
+    wx_show(s_wxCanvas,!forecast);wx_show(s_wxMessage,!forecast);
+    wx_show(s_wxFooter,!forecast);
+    for(auto *o:s_wxOverlay)wx_show(o,!forecast);
+    lv_label_set_text(s_wxTitle, s_weatherMode==0 ? "WX RADAR" : (s_weatherMode==1 ? "SAT CLOUDS" : "3-DAY WEATHER"));
+    lv_label_set_text(s_wxModeLabel, s_weatherMode==0 ? "SAT CLOUDS  >" : (s_weatherMode==1 ? "3-DAY WEATHER  >" : "WX RADAR  >"));
+    WeatherSnapshot w;
+    const bool hasWeather=weather_get(w);
+    if(forecast) {
+        if(!hasWeather) {
+            lv_label_set_text(s_fcTemp,"--");lv_label_set_text(s_fcCondition,"Waiting for forecast...");
+            lv_label_set_text(s_fcMetrics,"");lv_label_set_text(s_fcUpdated,"Open-Meteo");
+            for(int i=0;i<3;i++){lv_label_set_text(s_fcDay[i],"---");lv_label_set_text(s_fcDetails[i],"");}
+        } else {
+            char str[130];
+            snprintf(str,sizeof(str),"%.0f %s",wx_temp(w.tempC),wx_temp_unit());lv_label_set_text(s_fcTemp,str);
+            lv_label_set_text(s_fcCondition,weather_condition(w.code));
+            snprintf(str,sizeof(str),"Feels %.0f %s  |  Humidity %d%%\nWind %.0f %s",wx_temp(w.feelsC),wx_temp_unit(),w.humidity,wx_wind(w.windKmh),wx_wind_unit());
+            lv_label_set_text(s_fcMetrics,str);
+            snprintf(str,sizeof(str),"Open-Meteo  |  Updated %s",w.updated);lv_label_set_text(s_fcUpdated,str);
+            for(int i=0;i<3;i++){
+                int j=i+1;
+                if(j<w.dayCount){
+                    lv_label_set_text(s_fcDay[i],weather_day_name(w.days[j].date));
+                    snprintf(str,sizeof(str),"%s\n%.0f/%.0f %s\nRain %d%%",weather_condition(w.days[j].code),
+                             wx_temp(w.days[j].highC),wx_temp(w.days[j].lowC),wx_temp_unit(),w.days[j].rainChance);
+                    lv_label_set_text(s_fcDetails[i],str);
+                }else {lv_label_set_text(s_fcDay[i],"---");lv_label_set_text(s_fcDetails[i],"");}
+            }
+        }
+        return;
+    }
+    if(!s_wxUiBuffer){lv_label_set_text(s_wxMessage,"Not enough PSRAM");wx_show(s_wxCanvas,false);return;}
+    const int kind=s_weatherMode;
+    if(kind != s_canvasImageKind) {
+        s_seenImageVersion[kind]=0; // canvas contains previous mode, not this mode
+        s_canvasImageKind=kind;
+    }
+    uint32_t frame=0;double lat=0,lon=0;
+    const bool available=weather_image_copy((WeatherImageKind)kind,s_wxUiBuffer,&frame,&lat,&lon,&s_seenImageVersion[kind]);
+    wx_show(s_wxCanvas,available);
+    wx_show(s_wxMessage,!available);
+    if(available){
+        lv_canvas_set_buffer(s_wxCanvas,s_wxUiBuffer,WX_IMAGE_SIZE,WX_IMAGE_SIZE,LV_IMG_CF_TRUE_COLOR);
+        lv_obj_invalidate(s_wxCanvas);
+    }else lv_label_set_text(s_wxMessage, kind==0 ? "Loading precipitation radar..." : "Loading satellite clouds...");
+    char footer[120]="";
+    if(hasWeather)snprintf(footer,sizeof(footer),"%.0f %s  %s  |  Wind %.0f %s",
+                           wx_temp(w.tempC),wx_temp_unit(),weather_condition(w.code),wx_wind(w.windKmh),wx_wind_unit());
+    else snprintf(footer,sizeof(footer),"Weather forecast pending");
+    lv_label_set_text(s_wxFooter,footer);
+    if(s_wxOverlay[3]) {
+        char credit[90];
+        struct tm tmv={};time_t f=(time_t)frame;
+        if(available && frame && localtime_r(&f,&tmv))
+            snprintf(credit,sizeof(credit),"%02d:%02d   |   %s",tmv.tm_hour,tmv.tm_min,kind==0?"RainViewer":"EUMETSAT");
+        else snprintf(credit,sizeof(credit),"%s",kind==0?"RainViewer":"EUMETSAT");
+        lv_label_set_text(s_wxOverlay[3],credit);
+    }
+    if(s_wxOverlay[4])lv_label_set_text(s_wxOverlay[4],kind==0?"75 KM":"~200 KM");
+}
+static void wx_next(lv_event_t *) {
+    static uint32_t last=0;const uint32_t now=lv_tick_get();
+    if(now-last<250)return;
+    last=now;s_weatherMode=(s_weatherMode+1)%3;wx_refresh();
+}
+void ui_on_weather_updated(void) {
+    if(s_tv && lv_tileview_get_tile_act(s_tv)==s_tileWeather)wx_refresh();
+}
+
 // ----------------------------------------------------------------- list/stats
 void ui_set_status(bool wifiUp, bool feedOk, int rssi, const char *clock) {
     // bar count from RSSI (dBm): the weaker the signal, the fewer lit bars
@@ -355,6 +459,7 @@ static void refresh_active_tile(void) {
     lv_obj_t *act = lv_tileview_get_tile_act(s_tv);
     if (act == s_tileList)  build_list();
     else if (act == s_tileStats) build_stats();
+    else if (act == s_tileWeather) wx_refresh();
 }
 
 void ui_on_data_updated(void) {
@@ -447,7 +552,7 @@ static void build_card(void) {
 }
 
 void ui_show_view(int idx) {
-    if (s_tv && idx >= 0 && idx <= 2) lv_obj_set_tile_id(s_tv, (uint32_t)idx, 0, LV_ANIM_OFF);
+    if (s_tv && idx >= 0 && idx <= 3) lv_obj_set_tile_id(s_tv, (uint32_t)idx, 0, LV_ANIM_OFF);
 }
 
 // ------------------------------------------------------------------- splash
@@ -527,7 +632,8 @@ void ui_create(void) {
 
     s_tileRadar = lv_tileview_add_tile(s_tv, 0, 0, LV_DIR_RIGHT);
     s_tileList  = lv_tileview_add_tile(s_tv, 1, 0, LV_DIR_HOR);
-    s_tileStats = lv_tileview_add_tile(s_tv, 2, 0, LV_DIR_LEFT);
+    s_tileStats = lv_tileview_add_tile(s_tv, 2, 0, LV_DIR_HOR);
+    s_tileWeather = lv_tileview_add_tile(s_tv, 3, 0, LV_DIR_LEFT);
     // Rebuild the list/stats with the latest data the moment they slide into view
     // (between polls they'd otherwise show whatever was there when last visible).
     lv_obj_add_event_cb(s_tv, [](lv_event_t *) { refresh_active_tile(); }, LV_EVENT_VALUE_CHANGED, nullptr);
@@ -650,6 +756,101 @@ void ui_create(void) {
     lv_obj_set_style_text_color(ver, UI_DIM, 0);
     lv_label_set_text(ver, "Desk Radar v" FW_VERSION);
     lv_obj_align(ver, LV_ALIGN_CENTER, 0, 170);
+
+
+    // --- Weather: swipe left from Stats, tap the round panel to cycle modes ---
+    lv_obj_t *wp=make_round_panel(s_tileWeather);
+    s_wxTitle=make_tile_title(wp,"WX RADAR");
+#if defined(ESP_PLATFORM)
+    s_wxUiBuffer=(uint16_t*)heap_caps_malloc((size_t)WX_IMAGE_SIZE*WX_IMAGE_SIZE*2,
+                                             MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT);
+#else
+    s_wxUiBuffer=(uint16_t*)malloc((size_t)WX_IMAGE_SIZE*WX_IMAGE_SIZE*2);
+#endif
+    s_wxCanvas=lv_canvas_create(wp);
+    lv_obj_set_size(s_wxCanvas,WX_IMAGE_SIZE,WX_IMAGE_SIZE);
+    lv_obj_align(s_wxCanvas,LV_ALIGN_TOP_MID,0,51);
+    if(s_wxUiBuffer){memset(s_wxUiBuffer,0,(size_t)WX_IMAGE_SIZE*WX_IMAGE_SIZE*2);
+        lv_canvas_set_buffer(s_wxCanvas,s_wxUiBuffer,WX_IMAGE_SIZE,WX_IMAGE_SIZE,LV_IMG_CF_TRUE_COLOR);}
+    lv_obj_clear_flag(s_wxCanvas,LV_OBJ_FLAG_CLICKABLE);
+    s_wxMessage=lv_label_create(wp);
+    lv_obj_set_style_text_font(s_wxMessage,&lv_font_montserrat_14,0);
+    lv_obj_set_style_text_color(s_wxMessage,UI_SOFT,0);
+    lv_label_set_text(s_wxMessage,"Loading precipitation radar...");
+    lv_obj_align(s_wxMessage,LV_ALIGN_CENTER,0,0);
+    // Transparent overlay rings, north and centre marker above weather imagery.
+    for(int i=0;i<3;i++){
+        const int dia=WX_IMAGE_SIZE-i*115;
+        s_wxOverlay[i]=lv_obj_create(wp);lv_obj_remove_style_all(s_wxOverlay[i]);
+        lv_obj_set_size(s_wxOverlay[i],dia,dia);
+        lv_obj_align(s_wxOverlay[i],LV_ALIGN_TOP_MID,0,51+(WX_IMAGE_SIZE-dia)/2);
+        lv_obj_set_style_radius(s_wxOverlay[i],LV_RADIUS_CIRCLE,0);
+        lv_obj_set_style_border_color(s_wxOverlay[i],UI_GREEN,0);
+        lv_obj_set_style_border_width(s_wxOverlay[i],1,0);
+        lv_obj_set_style_border_opa(s_wxOverlay[i],i==0?160:80,0);
+        lv_obj_clear_flag(s_wxOverlay[i],LV_OBJ_FLAG_CLICKABLE|LV_OBJ_FLAG_SCROLLABLE);
+    }
+    s_wxOverlay[3]=lv_label_create(wp);
+    lv_obj_set_style_text_font(s_wxOverlay[3],&lv_font_montserrat_12,0);
+    lv_obj_set_style_text_color(s_wxOverlay[3],UI_SOFT,0);
+    lv_label_set_text(s_wxOverlay[3],"RainViewer");
+    lv_obj_align(s_wxOverlay[3],LV_ALIGN_TOP_MID,0,382);
+    s_wxOverlay[4]=lv_label_create(wp);
+    lv_obj_set_style_text_font(s_wxOverlay[4],&lv_font_montserrat_12,0);
+    lv_obj_set_style_text_color(s_wxOverlay[4],UI_GREEN,0);
+    lv_label_set_text(s_wxOverlay[4],"75 KM");
+    lv_obj_align(s_wxOverlay[4],LV_ALIGN_TOP_MID,132,219);
+    s_wxFooter=lv_label_create(wp);lv_obj_set_width(s_wxFooter,360);
+    lv_obj_set_style_text_font(s_wxFooter,&lv_font_montserrat_14,0);
+    lv_obj_set_style_text_color(s_wxFooter,UI_INK,0);
+    lv_obj_set_style_text_align(s_wxFooter,LV_TEXT_ALIGN_CENTER,0);
+    lv_label_set_text(s_wxFooter,"Weather forecast pending");
+    lv_obj_align(s_wxFooter,LV_ALIGN_TOP_MID,0,351);
+    // Three-day forecast occupies the same view when selected.
+    s_fcTemp=lv_label_create(wp);
+    lv_obj_set_style_text_font(s_fcTemp,&lv_font_montserrat_28,0);
+    lv_obj_set_style_text_color(s_fcTemp,UI_INK,0);
+    lv_obj_align(s_fcTemp,LV_ALIGN_TOP_MID,0,67);
+    s_fcCondition=lv_label_create(wp);
+    lv_obj_set_style_text_font(s_fcCondition,&lv_font_montserrat_16,0);
+    lv_obj_set_style_text_color(s_fcCondition,UI_SOFT,0);
+    lv_obj_align(s_fcCondition,LV_ALIGN_TOP_MID,0,111);
+    s_fcMetrics=lv_label_create(wp);lv_obj_set_width(s_fcMetrics,350);
+    lv_obj_set_style_text_font(s_fcMetrics,&lv_font_montserrat_14,0);
+    lv_obj_set_style_text_color(s_fcMetrics,UI_INK,0);
+    lv_obj_set_style_text_align(s_fcMetrics,LV_TEXT_ALIGN_CENTER,0);
+    lv_obj_align(s_fcMetrics,LV_ALIGN_TOP_MID,0,150);
+    for(int i=0;i<3;i++){
+        const int off=(i-1)*121;
+        s_fcDay[i]=lv_label_create(wp);
+        lv_obj_set_style_text_font(s_fcDay[i],&lv_font_montserrat_16,0);
+        lv_obj_set_style_text_color(s_fcDay[i],UI_GREEN,0);
+        lv_obj_align(s_fcDay[i],LV_ALIGN_TOP_MID,off,227);
+        s_fcDetails[i]=lv_label_create(wp);lv_obj_set_width(s_fcDetails[i],115);
+        lv_obj_set_style_text_font(s_fcDetails[i],&lv_font_montserrat_12,0);
+        lv_obj_set_style_text_color(s_fcDetails[i],UI_SOFT,0);
+        lv_obj_set_style_text_align(s_fcDetails[i],LV_TEXT_ALIGN_CENTER,0);
+        lv_obj_align(s_fcDetails[i],LV_ALIGN_TOP_MID,off,264);
+    }
+    s_fcUpdated=lv_label_create(wp);
+    lv_obj_set_style_text_font(s_fcUpdated,&lv_font_montserrat_12,0);
+    lv_obj_set_style_text_color(s_fcUpdated,UI_DIM,0);
+    lv_obj_align(s_fcUpdated,LV_ALIGN_TOP_MID,0,365);
+    lv_obj_t *wxButton=lv_btn_create(wp);lv_obj_set_size(wxButton,180,34);
+    lv_obj_align(wxButton,LV_ALIGN_BOTTOM_MID,0,-17);
+    lv_obj_set_style_radius(wxButton,17,0);
+    lv_obj_set_style_bg_color(wxButton,UI_PANEL,0);
+    lv_obj_set_style_border_color(wxButton,UI_GREEN,0);
+    lv_obj_set_style_border_width(wxButton,1,0);
+    s_wxModeLabel=lv_label_create(wxButton);
+    lv_obj_set_style_text_font(s_wxModeLabel,&lv_font_montserrat_12,0);
+    lv_obj_set_style_text_color(s_wxModeLabel,UI_GREEN,0);
+    lv_obj_center(s_wxModeLabel);
+    lv_obj_add_event_cb(wxButton,wx_next,LV_EVENT_CLICKED,nullptr);
+    lv_obj_add_event_cb(wp,wx_next,LV_EVENT_CLICKED,nullptr);
+    lv_obj_add_flag(wp,LV_OBJ_FLAG_CLICKABLE);
+    // Keep SCROLL_CHAIN enabled so a swipe still navigates the tileview.
+    wx_refresh();
 
     lv_obj_set_tile_id(s_tv, 0, 0, LV_ANIM_OFF);
 

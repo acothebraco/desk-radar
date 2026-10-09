@@ -1,7 +1,7 @@
 #pragma once
 // Desk Radar — build & user configuration.
 
-#define FW_VERSION "1.5.3"   // shown on the web config page + Stats screen; bump on release
+#define FW_VERSION "1.5.4"   // shown on the web config page + Stats screen; bump on release
 // Edit pins below: replace every -1 with the value from the Waveshare factory demo
 // (see docs/HARDWARE.md and docs/SETUP.md). Do NOT guess them.
 
@@ -56,6 +56,11 @@ static const float RANGE_STEPS_KM[] = {10.0f, 20.0f, 30.0f, 50.0f, 100.0f};
 #define ADSB_FEED_STALE_MS 60000UL
 #define ADSB_HTTPS_INSECURE 1               // 1 = setInsecure() (hobby). 0 = use pinned root CA.
 #define ADSB_MAX_AIRCRAFT   60              // hard cap parsed per poll (protect RAM in busy areas)
+
+// ---------- Weather products (cached in PSRAM; refresh sequentially) ----------
+#define WEATHER_REFRESH_MS      1800000UL   // Open-Meteo forecast: 30 min
+#define WX_RADAR_REFRESH_MS      300000UL   // RainViewer precipitation: 5 min
+#define CLOUD_IMAGE_REFRESH_MS   600000UL   // EUMETSAT cloud type: 10 min
 
 // ---------- Debug ----------
 #define DEBUG_MEM           0               // 1 = print a [mem] heap/fps line every 5s on serial

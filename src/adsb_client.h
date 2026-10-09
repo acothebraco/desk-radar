@@ -13,6 +13,7 @@ public:
     void setRange(float km) { _rangeKm = km; }
     void setHideGround(bool h) { _hideGround = h; }   // skip on-ground aircraft during parse
     void setMinAltFt(float ft) { _minAltFt = ft; }    // skip aircraft below this altitude (0 = off)
+    void setMaxAltFt(float ft) { _maxAltFt = ft; }    // skip aircraft above this altitude (0 = off)
     void setMilitaryOnly(bool m) { _milOnly = m; }    // keep only military-flagged aircraft
 
     // Fetch + parse. Returns true on success and fills `out` (replaces contents).
@@ -35,6 +36,7 @@ private:
     float  _rangeKm = 15.0f;
     bool   _hideGround = false;
     float  _minAltFt = 0.0f;
+    float  _maxAltFt = 0.0f;
     bool   _milOnly = false;
     uint32_t _lastOkMs = 0;
 };

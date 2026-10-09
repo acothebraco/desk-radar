@@ -170,8 +170,11 @@ static void flow_draw_seg(const FlowSeg &s) {
 }
 
 static void flow_redraw_all(void) {
-    if (!s_flowCanvas) return;
-    lv_canvas_fill_bg(s_flowCanvas, lv_color_black(), LV_OPA_TRANSP);
+    if (!s_flowCanvas || !s_flowBuf) return;
+    // Transparent TRUE_COLOR_ALPHA canvas: all-zero bytes mean transparent black.
+    // The original per-pixel LVGL canvas fill is expensive at 466x466.
+    memset(s_flowBuf, 0, LV_CANVAS_BUF_SIZE_TRUE_COLOR_ALPHA(SCREEN_W, SCREEN_H));
+    lv_obj_invalidate(s_flowCanvas);
     for (const FlowSeg &s : s_flow) flow_draw_seg(s);
 }
 

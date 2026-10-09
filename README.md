@@ -28,10 +28,18 @@ A live **ADS-B aircraft radar** for the **Waveshare ESP32-S3-Touch-AMOLED-1.75**
 - **Smart brightness**: configurable idle auto-dim (no touch), and **face-down sleep** (QMI8658 IMU — flip it over to turn the screen off).
 - **Configuration web page** at `http://deskradar.local/` — center point, display range, theme, live brightness slider, WiFi reset. Settings persist in NVS.
 - **First-boot WiFi setup** via a captive portal (`deskradar-Setup`), plus `deskradar-Recovery` after about 60 seconds offline (`http://192.168.4.1/`).
+- **Feed diagnostics:** live provider and last successful fetch in the web portal; min/max altitude filters and military-only filter in settings.
+- **Long-run stability:** TLS allocations prefer PSRAM and brief valid empty aircraft snapshots do not immediately clear the radar.
+
+## Weather views (new in v1.5.4)
+
+Swipe left from **Radar → List → Stats → Weather**. Tap the mode button to cycle between **WX Radar**, **Sat Clouds**, and **3-Day Weather**. RainViewer precipitation normally refreshes every 5 minutes, EUMETSAT Meteosat Cloud Type RGB every 10 minutes, and Open-Meteo weather/forecast every 30 minutes. Downloaded imagery uses PSRAM, stays cached during temporary service failures, and is rendered on the same round AMOLED. Weather information is provided for personal/educational use and depends on source availability; check each source's usage policy.
+
+Sources and attribution: [Open-Meteo](https://open-meteo.com/) · [RainViewer](https://www.rainviewer.com/api.html) · [EUMETSAT](https://view.eumetsat.int/).
 
 ## Current release
 
-**v1.5.3** — ADS-B multi-provider support, resilient WiFi recovery and LVGL display timing fix. See [release notes](RELEASE_NOTES_v1.5.3.md) and [changelog](CHANGELOG.md).
+**v1.5.4 (weather release candidate)** — three additional weather modes (Open-Meteo 3-day forecast, RainViewer precipitation, EUMETSAT satellite clouds) plus PSRAM-preferred TLS allocations, faster trail canvas clears, transient empty-snapshot protection, max-altitude filtering and live feed diagnostics. See [v1.5.4 release notes](RELEASE_NOTES_v1.5.4.md) and [changelog](CHANGELOG.md).
 
 **Aircraft data credit:** [airplanes.live](https://airplanes.live/), [adsb.fi](https://adsb.fi/), [adsb.lol](https://adsb.lol/). adsb.fi requires attribution/link and permits personal, non-commercial use of its public API. Follow each provider's access and rate-limit policies.
 
@@ -51,7 +59,7 @@ On first flash the ESP32-S3 may require BOOT while connecting USB (this board ha
 
 Makers can flash without installing anything using **ESP Web Tools** (Chrome or Edge on desktop):
 
-1. Open the **[web flasher](https://acothebraco.github.io/desk-radar//)** (the project's GitHub Pages site).
+1. Open the **[web flasher](https://acothebraco.github.io/desk-radar/)** (the project's GitHub Pages site).
 2. Plug the board in with a USB-C **data** cable and click **Install**.
 
 The flasher is built and published automatically by GitHub Actions ([`.github/workflows/webflasher.yml`](.github/workflows/webflasher.yml)) on every push to `main` — enable it once in **Settings → Pages → Source = GitHub Actions**. Tagged releases (`git tag v1.0.0 && git push origin v1.0.0`) also attach a ready-to-flash `DeskRadar-esp32s3.bin` to a **GitHub Release** via [`release.yml`](.github/workflows/release.yml). To preview the flasher locally:
@@ -87,7 +95,7 @@ src/
   imu_qmi8658.*      accelerometer (face-down sleep)
   battery.*          AXP2101 battery gauge
   rtc_pcf85063.*     PCF85063 real-time clock
-  adsb_client.*      airplanes.live fetch + parse
+  adsb_client.*      multi-provider ADS-B fetch + parse
   route*.* route.*   origin→destination lookup (adsbdb)
   sim_main.cpp       native SDL simulator (not flashed)
 include/lv_conf.h    LVGL config (v8)
@@ -96,7 +104,6 @@ scripts/             build_webflasher.sh (merge firmware -> single .bin)
 docs/                hardware / data-source / architecture notes
 ```
 
-
 ## Data & license
 
-Aircraft data: **airplanes.live** (free, **non-commercial / educational** — exactly this project; be polite with request cadence). Routes: **adsbdb.com** (free), adsb.fi, adsb.lol. Personal/hobby project intended for a future MakerWorld release (3D-printed enclosure + this firmware).
+Aircraft data: [airplanes.live](https://airplanes.live/), [adsb.fi](https://adsb.fi/) and [adsb.lol](https://adsb.lol/). Providers impose different usage policies; adsb.fi requests attribution and permits personal/non-commercial use. Respect access restrictions and rate limits. Routes: **adsbdb.com** (free). Personal/hobby project intended for a future MakerWorld release (3D-printed enclosure + this firmware).

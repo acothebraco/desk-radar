@@ -7,6 +7,12 @@
 #include "aircraft.h"
 #include "geo.h"
 #include "adsb_client.h"
+#include "snapshot_gate.h"
+#include "weather.h"
+#include "weather_client.h"
+#include "weather_image.h"
+#include "wx_radar_client.h"
+#include "cloud_image_client.h"
 #include "route.h"
 #include "route_client.h"
 #include "photo.h"
@@ -33,6 +39,17 @@
 #include <WiFiClientSecure.h>
 #include <esp_wifi.h>
 #include <nvs.h>
+#include <mbedtls/platform.h>  // allocate mbedTLS buffers from PSRAM when possible
+
+// Prefer PSRAM for mbedTLS record buffers so repeated HTTPS requests do not
+// fragment internal DMA-capable RAM. Fall back to internal RAM if PSRAM is full.
+// Register exactly once at boot, before starting any WiFi/HTTPS operations.
+static void* tls_calloc(size_t count, size_t size) {
+    return heap_caps_calloc_prefer(count, size, 2,
+                                   MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT,
+                                   MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+}
+static void tls_free(void* ptr) { heap_caps_free(ptr); }
 
 // ---- shared state ----
 static std::vector<Aircraft> g_aircraft;      // latest snapshot
@@ -60,6 +77,7 @@ static bool                  g_showSweep = true;                     // rotating
 static int                   g_units = 0;                            // 0=Aviation 1=Metric 2=Imperial (web/NVS)
 static bool                  g_showAirports = true;                  // airport markers on/off (web/NVS)
 static int                   g_minAltFt = 0;                         // minimum aircraft altitude filter, ft; 0 = off
+static int                   g_maxAltFt = 0;                         // maximum aircraft altitude filter, ft; 0 = off
 static bool                  g_milOnly = false;                      // only show military-flagged aircraft                  
 static int                   g_rotation = 0;                         // display rotation 0/1/2/3 = 0/90/180/270 (web/NVS)
 static bool                  g_useGps = false;                       // auto-set home from the LC76G GPS (-G variant) (web/NVS)
@@ -69,6 +87,9 @@ static bool                  g_rtcSynced = false;                    // RTC writ
 static std::vector<Aircraft> g_snap;                                 // last snapshot (instant re-render on zoom)
 static volatile bool         g_requery = false;                      // range changed -> adsb_task re-begins
 static float                 g_requeryKm = 0.0f;
+static volatile bool         g_weatherDirty = false;
+static volatile bool         g_wxImageDirty = false;
+static volatile bool         g_cloudImageDirty = false;
 static volatile bool         g_feedOk = true;                        // ADS-B feed healthy? (HUD warning)
 static volatile uint32_t     g_lastFeedOkMs = 0;                     // millis() of the last good poll (HUD staleness)
 static volatile uint32_t     g_rebootAtMs = 0;                       // !=0: reboot when millis() reaches it (clean start after WiFi config)
@@ -216,14 +237,20 @@ static void checkWiFiRecovery() {
 // ---- networking task (core 0): fetch + parse, never touches the display ----
 static void adsb_task(void*) {
     std::vector<Aircraft> fresh;
+    AircraftSnapshotGate snapshotGate;
+    bool retainingEmptySnapshot = false;
     bool wasConnected = false;
     uint32_t lastPoll = 0;
+    uint32_t nextForecastAt=0, nextPrecipAt=0, nextCloudAt=0;
+    bool weatherTimersArmed=false;
+    double weatherLat=0,weatherLon=0;
     uint32_t lastFeedOk = millis();          // self-heal: time of last good (or no-WiFi) poll
     for (;;) {
     if (g_standbyMode) {
         lastFeedOk = millis();
-        g_lastFeedOkMs = millis();
+        // Do not replace the last *successful* fetch timestamp during standby.
         lastPoll = 0;
+        weatherTimersArmed=false;
         vTaskDelay(pdMS_TO_TICKS(1000));
         continue;
     }
@@ -237,6 +264,23 @@ static void adsb_task(void*) {
             configTzTime(TZ_STR, "pool.ntp.org", "time.nist.gov");  // local time (Spain)
             Serial.println("[web] config: http://deskradar.local/  (or the IP above)");
             // mDNS + OTA are started on core 1 (loop) to keep all mDNS use on one core
+        }
+        if(conn && !weatherTimersArmed) {
+            // Stagger image downloads to give live aircraft polling the first turn.
+            nextForecastAt=millis()+5000UL;
+            nextPrecipAt=millis()+12000UL;
+            nextCloudAt=millis()+15000UL;
+            weatherLat=g_settings.homeLat;weatherLon=g_settings.homeLon;
+            weatherTimersArmed=true;
+        }
+        if(!conn)weatherTimersArmed=false;
+        // Changes from web or optional GPS should refresh all three products.
+        if(weatherTimersArmed &&
+           (weatherLat!=g_settings.homeLat || weatherLon!=g_settings.homeLon)) {
+            weatherLat=g_settings.homeLat;weatherLon=g_settings.homeLon;
+            nextForecastAt=millis()+2000UL;
+            nextPrecipAt=millis()+8000UL;
+            nextCloudAt=millis()+13000UL;
         }
         wasConnected = conn;
         // self-heal: a long feed outage while WiFi is up usually means the internal heap
@@ -269,18 +313,61 @@ static void adsb_task(void*) {
                     Serial.printf("[adsb] fetched %u aircraft from %s\n", (unsigned)fresh.size(), g_adsb.lastHost());
                     failCount = 0;
                     g_feedOk = true;
-                    lastFeedOk = nowMs;
-                    g_lastFeedOkMs = nowMs;          // HUD: mark data as fresh
-                    if (xSemaphoreTake(g_ac_mutex, pdMS_TO_TICKS(200)) == pdTRUE) {
-                        g_aircraft.swap(fresh);   // O(1) handoff: no per-Aircraft String copies under the lock
-                        g_acDirty = true;
-                        xSemaphoreGive(g_ac_mutex);
+                    const uint32_t receivedMs = millis();
+                    lastFeedOk = receivedMs;
+                    g_lastFeedOkMs = receivedMs;  // only successful ADS-B poll updates this
+                    if (!snapshotGate.shouldPublish(!fresh.empty(), receivedMs, AC_STALE_MS)) {
+                        if (!retainingEmptySnapshot)
+                            Serial.printf("[adsb] empty snapshot; retaining contacts for %u ms\n",
+                                          (unsigned)AC_STALE_MS);
+                        retainingEmptySnapshot = true;
+                    } else {
+                        if (retainingEmptySnapshot && fresh.empty())
+                            Serial.println("[adsb] empty snapshot persisted; clearing contacts");
+                        retainingEmptySnapshot = false;
+                        if (xSemaphoreTake(g_ac_mutex, pdMS_TO_TICKS(200)) == pdTRUE) {
+                            g_aircraft.swap(fresh);   // O(1) handoff under lock
+                            g_acDirty = true;
+                            xSemaphoreGive(g_ac_mutex);
+                        }
                     }
                 } else if (g_adsb.lastPollSkipped()) {
                     if ((int32_t)(nowMs - g_adsb.lastOkMs()) > (int32_t)ADSB_FEED_STALE_MS) g_feedOk = false;
                 } else {
                     Serial.println("[adsb] poll failed");
                     if (++failCount >= 5) g_feedOk = false;   // sustained outage -> HUD warning
+                }
+            }
+            // Weather jobs run serially on this network core after aircraft polling.
+            // Their caches remain usable through WiFi dropouts and provider failures.
+            // Signed comparison is rollover-safe for millis() deadlines.
+            if(weatherTimersArmed && (int32_t)(nowMs-nextForecastAt)>=0) {
+                WeatherSnapshot wx;
+                if(weather_fetch(g_settings.homeLat,g_settings.homeLon,wx)) {
+                    weather_store(wx);g_weatherDirty=true;
+                    nextForecastAt=millis()+WEATHER_REFRESH_MS;
+                    Serial.println("[weather] forecast updated");
+                } else {
+                    nextForecastAt=millis()+60000UL;
+                    Serial.println("[weather] forecast failed; retry in 60s");
+                }
+            }
+            if(weatherTimersArmed && (int32_t)(nowMs-nextPrecipAt)>=0) {
+                if(wx_radar_fetch(g_settings.homeLat,g_settings.homeLon)) {
+                    g_wxImageDirty=true;
+                    nextPrecipAt=millis()+WX_RADAR_REFRESH_MS;
+                } else {
+                    nextPrecipAt=millis()+60000UL;
+                    Serial.println("[wxradar] fetch failed; retry in 60s");
+                }
+            }
+            if(weatherTimersArmed && (int32_t)(nowMs-nextCloudAt)>=0) {
+                if(cloud_image_fetch(g_settings.homeLat,g_settings.homeLon)) {
+                    g_cloudImageDirty=true;
+                    nextCloudAt=millis()+CLOUD_IMAGE_REFRESH_MS;
+                } else {
+                    nextCloudAt=millis()+60000UL;
+                    Serial.println("[clouds] fetch failed; retry in 60s");
                 }
             }
             // Then the on-demand lookups for the selected aircraft. Their timeouts are kept
@@ -325,6 +412,7 @@ static void loadSettings() {
     g_units            = p.getInt("units", 0);
     g_autoUpdate       = p.getBool("autoupd", false);
     g_minAltFt         = p.getInt("minalt", 0);
+    g_maxAltFt         = constrain(p.getInt("maxalt", 0), 0, 60000);
     g_milOnly          = p.getBool("milonly", false);
     g_tz               = p.getString("tz", TZ_STR);
     g_standbyMode      = p.getBool("standby", false);
@@ -775,6 +863,21 @@ static void checkAutomaticUpdate() {
     Serial.printf("[update] automatic install failed: %s\n", error.c_str());
 }
 
+static void handleFeedStatus() {
+    const uint32_t lastOk = g_lastFeedOkMs;  // published by ADS-B core
+    const bool wifiUp = WiFi.status() == WL_CONNECTED;
+    const uint32_t ageSec = lastOk ? (uint32_t)(millis() - lastOk) / 1000UL : 0;
+    const char *source = lastOk ? g_adsb.lastHost() : "waiting";
+    char json[256];
+    snprintf(json, sizeof(json),
+             "{\"source\":\"%s\",\"last_ok_ms\":%lu,\"age_sec\":%lu,"
+             "\"wifi\":%s,\"fresh\":%s}",
+             source, (unsigned long)lastOk, (unsigned long)ageSec,
+             wifiUp ? "true" : "false",
+             (lastOk && wifiUp && ageSec < (ADSB_FEED_STALE_MS / 1000UL)) ? "true" : "false");
+    g_web.send(200, "application/json", json);
+}
+
 static void handleRoot() {
     const int th = radar::theme();
     const int ranges[] = {10, 15, 25, 30, 50, 100, 150, 250};
@@ -840,6 +943,23 @@ static void handleRoot() {
     maopts += o;
 }
     
+    const struct { int ft; const char *lbl; } maxvals[] = {
+        {0, "Off"},
+        {3000, "Below 3,000 ft"},
+        {5000, "Below 5,000 ft"},
+        {10000, "Below 10,000 ft"},
+        {20000, "Below 20,000 ft"},
+        {33000, "Below 33,000 ft"},
+        {45000, "Below 45,000 ft"}
+    };
+    String mxopts;
+    for (const auto &mv : maxvals) {
+        char o[100];
+        snprintf(o, sizeof(o), "<option value=%d%s>%s</option>",
+                 mv.ft, mv.ft == g_maxAltFt ? " selected" : "", mv.lbl);
+        mxopts += o;
+    }
+
     const char *tlnames[] = {"Off", "Short", "Medium", "Long"};
     String tlopts;
     for (int i = 0; i < 4; ++i) {
@@ -947,6 +1067,8 @@ static void handleRoot() {
         "<label><input type=checkbox class=ck %s onchange='sw(this.checked)'>Show radar sweep</label>"
         "<label><input type=checkbox class=ck %s onchange='ap(this.checked)'>Show airports</label>"
         "<label>Minimum altitude</label><select onchange='ma(this.value)'>%s</select>"
+        "<label>Maximum altitude</label><select onchange='mx(this.value)'>%s</select>"
+        "<div style='font-size:12px;opacity:.6;margin:-2px 0 6px'>When both limits are enabled, maximum must be above minimum.</div>"
         "<label><input type=checkbox class=ck %s onchange='mo(this.checked)'>Military aircraft only</label>"
         "<label>Aircraft trails</label><select onchange='tl(this.value)'>%s</select>"
         "<label>Screen rotation (USB-C position)</label><select onchange='ro(this.value)'>%s</select>"
@@ -958,6 +1080,11 @@ static void handleRoot() {
         "<label>Alert on</label><select onchange='al(this.value)'>%s</select>"
         "<label>Proximity alert</label><select onchange='px(this.value)'>%s</select>"
         "<button type=button class=sec onclick='t()'>Test ping</button></div>"
+        "<div class=card><div class=t>ADS-B data feed</div>"
+        "<p style='color:#9affc8;font-size:13px;margin:0 0 4px'>Active source: <b id=feedsource>checking...</b></p>"
+        "<p style='color:#5f7a6c;font-size:12px;margin:0'>Last successful fetch: <b id=feedlast>checking...</b></p>"
+        "<p style='color:#5f7a6c;font-size:12px;margin:6px 0 0'>Status: <b id=feedstate>checking...</b></p>"
+        "</div>"
         "<div class=card><div class=t>Network</div>"
         "<p style='color:#5f7a6c;font-size:12px;margin:8px 0 0'>If WiFi is lost for about 60 seconds, DeskRadar opens recovery AP <b>deskradar-Recovery</b> password <b>deskradar</b>.</p>"
         "<p style='color:#9affc8;font-size:13px;margin:0 0 4px'>Forget the saved WiFi and reopen the setup portal.</p>"
@@ -990,6 +1117,7 @@ static void handleRoot() {
         "function sw(c){fetch('/sweep?v='+(c?1:0)+'&save=1');}"
         "function ap(c){fetch('/airports?v='+(c?1:0)+'&save=1');}"
         "function ma(v){fetch('/altmin?v='+v+'&save=1');}"
+        "function mx(v){fetch('/altmax?v='+v+'&save=1');}"
         "function mo(c){fetch('/milonly?v='+(c?1:0)+'&save=1');}"
         "function tl(v){fetch('/trail?v='+v+'&save=1');}"
         "function ro(v){fetch('/rotate?v='+v+'&save=1');}"
@@ -1002,6 +1130,12 @@ static void handleRoot() {
         "var p=document.getElementById('batpct');if(p){p.innerHTML=j.present?(j.percent+'%%'):'not detected';}"
         "var s=document.getElementById('batstate');if(s){s.innerHTML=j.present?(j.charging?'charging':'battery'):'USB / no battery';}"
         "}).catch(function(e){});}"
+
+        "function fs(){fetch('/feedstatus',{cache:'no-store'}).then(function(r){return r.json();}).then(function(j){"
+        "var a=document.getElementById('feedsource');if(a)a.textContent=j.source||'waiting';"
+        "var b=document.getElementById('feedlast');if(b)b.textContent=j.last_ok_ms?(j.age_sec+' sec ago'):'Never';"
+        "var c=document.getElementById('feedstate');if(c)c.textContent=!j.wifi?'WiFi offline':(j.fresh?'Receiving':'Waiting for new data');"
+        "}).catch(function(){var c=document.getElementById('feedstate');if(c)c.textContent='Status unavailable';});}"
 
         "function au(c){var x=document.getElementById('updauto');if(x){x.innerHTML=c?'ON':'OFF';}fetch('/autoupdate?v='+(c?1:0)+'&save=1');}"
         "function iu(){var e=document.getElementById('upd');if(e){e.innerHTML='Starting update...';}"
@@ -1028,7 +1162,7 @@ static void handleRoot() {
         "setTimeout(function(){MAP.invalidateSize();},300);"
         "}"
 
-        "window.addEventListener('load',function(){bs();setInterval(bs,30000);initMap();});"
+        "window.addEventListener('load',function(){bs();fs();setInterval(bs,30000);setInterval(fs,10000);initMap();});"
         // auto-pick the visitor's time zone from their browser clock (only if they haven't set one)
         "var TZSET=%d;(function(){if(TZSET)return;"
         "var d=new Date(),j=new Date(d.getFullYear(),0,1).getTimezoneOffset(),"
@@ -1041,7 +1175,7 @@ static void handleRoot() {
         tzopts.c_str(),
         g_standbyMode ? "" : "checked",
         g_brightnessDay, iopts.c_str(), g_showSweep ? "checked" : "",
-        g_showAirports ? "checked" : "", maopts.c_str(), g_milOnly ? "checked" : "",
+        g_showAirports ? "checked" : "", maopts.c_str(), mxopts.c_str(), g_milOnly ? "checked" : "",
         tlopts.c_str(), rotopts.c_str(), uopts.c_str(),
         g_volume, g_muted ? "checked" : "", aopts.c_str(), popts.c_str(),
         updateLastText.c_str(),
@@ -1237,6 +1371,20 @@ static void handleAltMin() {
     g_web.send(200, "text/plain", "ok");
 }
 
+static void handleAltMax() {
+    if (g_web.hasArg("v")) {
+        g_maxAltFt = constrain((int)g_web.arg("v").toInt(), 0, 60000);
+        g_adsb.setMaxAltFt((float)g_maxAltFt);
+        if (g_web.hasArg("save")) {
+            Preferences p;
+            p.begin("deskradar", false);
+            p.putInt("maxalt", g_maxAltFt);
+            p.end();
+        }
+    }
+    g_web.send(200, "text/plain", "ok");
+}
+
 static void handleMilOnly() {
     if (g_web.hasArg("v")) {
         g_milOnly = g_web.arg("v").toInt() != 0;
@@ -1361,6 +1509,11 @@ void setup() {
         Serial.println("[!] Pins in config.h are still -1. Copy them from the Waveshare demo.");
     }
     Serial.printf("PSRAM: %u bytes free\n", (unsigned)ESP.getFreePsram());
+    // Safe to install before the first TLS connection; the core normally uses
+    // internal RAM for record buffers, which fragments over many polls.
+    const int tlsAllocRc = mbedtls_platform_set_calloc_free(tls_calloc, tls_free);
+    Serial.printf("[tls] PSRAM-preferred allocator %s (rc=%d)\n",
+                  tlsAllocRc == 0 ? "enabled" : "unavailable", tlsAllocRc);
 
     loadSettings();
     route_cache_begin();   // clear stale route cache if the label format changed
@@ -1448,6 +1601,7 @@ void setup() {
     float queryKm = queryRadiusKm();
     g_adsb.begin(g_settings.homeLat, g_settings.homeLon, queryKm);
     g_adsb.setMinAltFt((float)g_minAltFt);
+    g_adsb.setMaxAltFt((float)g_maxAltFt);
     g_adsb.setMilitaryOnly(g_milOnly);
     g_ac_mutex = xSemaphoreCreateMutex();
     xTaskCreatePinnedToCore(adsb_task, "adsb", 16384, nullptr, 1, nullptr, 0);  // TLS needs a big stack
@@ -1464,6 +1618,8 @@ void setup() {
     g_web.on("/sweep", handleSweep);
     g_web.on("/airports", handleAirports);
     g_web.on("/altmin", handleAltMin);
+    g_web.on("/altmax", handleAltMax);
+    g_web.on("/feedstatus", HTTP_GET, handleFeedStatus);
     g_web.on("/milonly", handleMilOnly);
 g_web.on("/trail", handleTrail);
     g_web.on("/rotate", handleRotate);
@@ -1536,6 +1692,12 @@ void loop() {
             ui_on_data_updated();              // refresh card/list/stats
             checkAudioEvents();                // ping new-in-range / emergency / military
         }
+    }
+
+    // Network task publishes flags only; LVGL redraw happens here on core 1.
+    if (g_weatherDirty || g_wxImageDirty || g_cloudImageDirty) {
+        g_weatherDirty=false;g_wxImageDirty=false;g_cloudImageDirty=false;
+        if (!g_standbyMode)ui_on_weather_updated();
     }
 
     // periodic: HUD clock + wifi/battery indicators
