@@ -8,7 +8,6 @@ name: Build firmware & deploy web flasher
 on:
   push:
     branches: [main]
-    tags: ['v*']
   workflow_dispatch:
 
 permissions:
